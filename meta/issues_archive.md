@@ -165,3 +165,4 @@
 - [x] [Allow multiple direct download queueing](issues/allow-multiple-direct-download-queueing.md)
 - [x] [Exclude watched videos from Up next](issues/exclude-watched-videos-from-up-next.md)
 - [x] [Rework channel-first download boundary](issues/rework-channel-first-download-boundary.md)
+- [x] [Clean up README for users](issues/clean-up-readme-for-users.md)
