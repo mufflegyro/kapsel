@@ -1,0 +1,5 @@
+- [ ] [Sandbox external media tools](issues/sandbox-external-media-tools.md)
+- [ ] [Add macOS sandbox-exec media tool sandbox](issues/add-macos-sandbox-exec-media-tool-sandbox.md)
+- [ ] [Add CSRF protection for state-changing APIs](issues/add-csrf-protection-for-state-changing-apis.md)
+- [ ] [Split download worker responsibilities](issues/split-download-worker-responsibilities.md)
+- [ ] [Clarify scheduler job ownership](issues/clarify-scheduler-job-ownership.md)

@@ -1,0 +1,33 @@
+[tools]
+go = "1.26.2"
+node = "25.9.0"
+pnpm = "10.33.2"
+watchexec = "2.1.2"
+
+[tasks.test]
+description = "Run backend tests"
+run = "go test ./..."
+
+[tasks.dev]
+description = "Run the development server with automatic rebuilds and restarts"
+run = "watchexec --restart --clear --debounce 300ms --watch cmd --watch internal --watch frontend/src --watch frontend/index.html --watch frontend/vite.config.js --watch frontend/package.json --watch frontend/pnpm-lock.yaml --exts go,svelte,css,js,html,json --ignore 'internal/web/static/**' --shell=none -- sh scripts/dev-server.sh"
+
+[tasks.frontend-dev]
+description = "Run the frontend development server"
+run = "pnpm --dir frontend dev"
+
+[tasks.frontend-build]
+description = "Build frontend assets for embedding"
+run = "pnpm --dir frontend build"
+
+[tasks.browser-smoke]
+description = "Run browser end-to-end smoke tests"
+run = "pnpm --dir frontend browser-smoke"
+
+[tasks.browser-smoke-install]
+description = "Install Chromium for browser smoke tests"
+run = "pnpm --dir frontend browser-smoke:install"
+
+[tasks.release-build]
+description = "Build embedded frontend assets and a release binary"
+run = "pnpm --dir frontend build && mkdir -p dist && go build -trimpath -ldflags='-s -w' -o dist/kapsel ./cmd/kapsel"

@@ -1,0 +1,1 @@
+ALTER TABLE channels ADD COLUMN thumbnail_url TEXT NOT NULL DEFAULT '';

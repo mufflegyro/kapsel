@@ -1,0 +1,29 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Go
+coverage.out
+bin/
+
+# Frontend
+node_modules/
+dist/
+build/
+frontend/playwright-report/
+frontend/test-results/
+
+# Local data
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+tmp/
+
+# Local-only deployment notes
+LOCAL_DEPLOYMENT_RUNBOOK.md
+
+# Local browser screenshots; commit curated assets under docs/ instead.
+brave_screenshot_*.png

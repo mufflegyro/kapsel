@@ -1,0 +1,22 @@
+[Unit]
+Description=Kapsel local video archive
+Documentation=file:/opt/kapsel/docs/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kapsel
+Group=kapsel
+EnvironmentFile=/etc/kapsel/kapsel.env
+WorkingDirectory=/var/lib/kapsel
+ExecStart=/opt/kapsel/kapsel
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/kapsel /srv/kapsel/media /srv/kapsel/imports
+
+[Install]
+WantedBy=multi-user.target
