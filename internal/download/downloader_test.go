@@ -37,7 +37,7 @@ func TestBuildCommand(t *testing.T) {
 	if command.Dir != "/archive/media" {
 		t.Fatalf("expected command working directory %q, got %q", "/archive/media", command.Dir)
 	}
-	for _, arg := range []string{"--no-playlist", "--no-simulate", "--progress", "--dump-single-json", "--write-info-json", "--write-thumbnail", "--paths", "/archive/media", "https://www.youtube.com/watch?v=abc123DEF45"} {
+	for _, arg := range []string{"--no-playlist", "--no-simulate", "--progress", "--check-formats", "--dump-single-json", "--write-info-json", "--write-thumbnail", "--paths", "/archive/media", "https://www.youtube.com/watch?v=abc123DEF45"} {
 		if !slices.Contains(command.Args, arg) {
 			t.Fatalf("expected args to contain %q: %#v", arg, command.Args)
 		}

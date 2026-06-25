@@ -962,6 +962,7 @@ func (d *Downloader) BuildCommand(rawURL string) (Command, error) {
 			"--no-simulate",
 			"--newline",
 			"--progress",
+			"--check-formats",
 			"--dump-single-json",
 			"--write-info-json",
 			"--write-thumbnail",

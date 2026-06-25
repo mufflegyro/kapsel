@@ -166,3 +166,4 @@
 - [x] [Exclude watched videos from Up next](issues/exclude-watched-videos-from-up-next.md)
 - [x] [Rework channel-first download boundary](issues/rework-channel-first-download-boundary.md)
 - [x] [Clean up README for users](issues/clean-up-readme-for-users.md)
+- [x] [Fix production download failures](issues/fix-production-download-failures.md)
