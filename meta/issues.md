@@ -15,3 +15,4 @@
 - [x] [Mark members-only videos and disable their download](issues/mark-members-only-videos.md)
 - [x] [Hide members-only videos from all views](issues/hide-members-only-videos.md)
 - [x] [Import playlists from CSV exports](issues/import-playlists-from-csv.md)
+- [ ] [Add metadata-only scan mode to import-playlists](issues/playlist-import-metadata-scan.md)
