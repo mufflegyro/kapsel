@@ -7,4 +7,7 @@
 - [ ] [Opt-in retention for manual downloads](issues/opt-in-retention-for-manual-downloads.md)
 - [ ] [Add automatic yt-dlp nightly updates](issues/add-auto-ytdlp-nightly-update.md)
 - [ ] [Import subscriptions from Google Takeout subscriptions.csv](issues/import-subscriptions-csv.md)
-- [ ] [Delete a channel and all its content](issues/delete-channel-and-content.md)
+- [ ] [Allow deleting channels that only have catalog metadata](issues/delete-channel-and-content.md)
+- [ ] [Add user management and a managed login system](issues/add-user-management-and-login-system.md)
+- [ ] [Add a Docker deployment for LAN/HTTPS use](issues/add-docker-lan-https-deployment.md)
+- [ ] [Add YouTube metadata search with add-to-archive actions](issues/add-youtube-metadata-search.md)
