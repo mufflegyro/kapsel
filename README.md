@@ -73,6 +73,8 @@ Common settings:
 - `KAPSEL_YTDLP_SLEEP_INTERVAL`: randomized pacing between yt-dlp calls, default `10s`.
 - `KAPSEL_YTDLP_UPDATE_INTERVAL`: how often to auto-update `yt-dlp` to the latest nightly, default `24h`. Set to `0s` to disable automatic updates.
 - `KAPSEL_FFMPEG_PATH`: path to `ffmpeg`, default `ffmpeg`.
+- `KAPSEL_SUBTITLES_ENABLED`: download video subtitles during downloads, default `true`. Set to `false` to skip subtitle fetching entirely (useful when YouTube rate-limits the subtitle endpoint with HTTP 429).
+- `KAPSEL_CHANNEL_AUTO_DOWNLOAD_INTERVAL`: minimum time between automatic checks of subscribed channels for new episodes, default `24h`. Set to a shorter duration (e.g. `6h`) for a faster cycle, or `0s` to disable the auto-download scheduler entirely. Per-channel checks are spaced out with random jitter based on each channel's last scan time, so many channels do not all fire at once.
 
 Generate a password hash without putting the password in shell history:
 
