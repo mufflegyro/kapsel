@@ -35,6 +35,7 @@ const (
 	EnvYTDLPFormat         = "KAPSEL_YTDLP_FORMAT"
 	EnvYTDLPPath           = "KAPSEL_YTDLP_PATH"
 	EnvYTDLPSleepInterval  = "KAPSEL_YTDLP_SLEEP_INTERVAL"
+	EnvYTDLPUpdateInterval = "KAPSEL_YTDLP_UPDATE_INTERVAL"
 )
 
 const defaultYTDLPFormat = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
@@ -65,6 +66,7 @@ type Config struct {
 	YTDLPFormat                  string
 	YTDLPPath                    string
 	YTDLPSleepInterval           time.Duration
+	YTDLPUpdateInterval          time.Duration
 }
 
 func Load() Config {
@@ -105,6 +107,7 @@ func loadFromLookup(lookup func(string) (string, bool), lookPath func(string) (s
 		YTDLPFormat:                  valueOrDefault(lookup, EnvYTDLPFormat, defaultYTDLPFormat),
 		YTDLPPath:                    valueOrDefault(lookup, EnvYTDLPPath, "yt-dlp"),
 		YTDLPSleepInterval:           nonNegativeDurationOrDefault(lookup, EnvYTDLPSleepInterval, download.DefaultYTDLPSleepInterval),
+		YTDLPUpdateInterval:          nonNegativeDurationOrDefault(lookup, EnvYTDLPUpdateInterval, download.DefaultYTDLPUpdateInterval),
 	}
 }
 

@@ -36,6 +36,7 @@ const (
 	ChannelScanJobType              = "channel_scan"
 	ChannelAutoDownloadJobType      = "channel_auto_download"
 	RetentionJobType                = "retention_cleanup"
+	YTDLPUpdateJobType              = "ytdlp_update"
 	DownloadOriginManual            = "manual"
 	DownloadOriginChannelAuto       = "channel_auto"
 	MediaOriginImported             = "imported"
@@ -56,6 +57,8 @@ const DefaultRetentionInterval = 24 * time.Hour
 const DefaultRetentionStaleAfter = 14 * 24 * time.Hour
 
 const DefaultRetentionWatchedAfter = 24 * time.Hour
+
+const DefaultYTDLPUpdateInterval = 24 * time.Hour
 
 const DefaultFormatSelector = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
 
@@ -576,6 +579,16 @@ func EnqueueRetentionCleanup(ctx context.Context, store *jobs.Store, runAfter ti
 	})
 }
 
+func EnqueueYTDLPUpdate(ctx context.Context, store *jobs.Store, runAfter time.Time) (jobs.Job, bool, error) {
+	if store == nil {
+		return jobs.Job{}, false, errors.New("yt-dlp update scheduler missing job store")
+	}
+
+	return store.FindOrEnqueue(ctx, jobs.EnqueueParams{Type: YTDLPUpdateJobType, PayloadJSON: `{}`, MaxAttempts: 1, RunAfter: runAfter}, func(ctx context.Context, tx *sql.Tx) (jobs.Job, bool, error) {
+		return store.ActiveByPayloadWithoutCancelRequestedTx(ctx, tx, YTDLPUpdateJobType, `{}`)
+	})
+}
+
 type ChannelAutoScheduleOptions struct {
 	Now      func() time.Time
 	Interval time.Duration
@@ -583,6 +596,11 @@ type ChannelAutoScheduleOptions struct {
 }
 
 type RetentionScheduleOptions struct {
+	Now      func() time.Time
+	Interval time.Duration
+}
+
+type YTDLPUpdateScheduleOptions struct {
 	Now      func() time.Time
 	Interval time.Duration
 }
@@ -705,6 +723,62 @@ SELECT EXISTS(
 	}
 
 	_, created, err := EnqueueRetentionCleanup(ctx, store, now)
+	if err != nil {
+		return 0, err
+	}
+	if !created {
+		return 0, nil
+	}
+
+	return 1, nil
+}
+
+func EnsureYTDLPUpdateJobs(ctx context.Context, db *sql.DB, store *jobs.Store, options YTDLPUpdateScheduleOptions) (int, error) {
+	if db == nil {
+		return 0, errors.New("yt-dlp update scheduler missing database")
+	}
+	if store == nil {
+		return 0, errors.New("yt-dlp update scheduler missing job store")
+	}
+	nowFunc := options.Now
+	if nowFunc == nil {
+		nowFunc = func() time.Time { return time.Now().UTC() }
+	}
+	interval := options.Interval
+	if interval <= 0 {
+		interval = DefaultYTDLPUpdateInterval
+	}
+	now := nowFunc().UTC()
+
+	var active bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM jobs
+  WHERE type = ?
+    AND status IN (?, ?)
+    AND cancel_requested = 0
+)`, YTDLPUpdateJobType, jobs.StatusQueued, jobs.StatusRunning).Scan(&active); err != nil {
+		return 0, err
+	}
+	if active {
+		return 0, nil
+	}
+
+	var latestCreatedAt string
+	var latestStatus jobs.Status
+	err := db.QueryRowContext(ctx, "SELECT created_at, status FROM jobs WHERE type = ? ORDER BY created_at DESC LIMIT 1", YTDLPUpdateJobType).Scan(&latestCreatedAt, &latestStatus)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if err == nil && latestStatus != jobs.StatusFailed {
+		latest, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(latestCreatedAt))
+		if parseErr == nil && now.Sub(latest.UTC()) < interval {
+			return 0, nil
+		}
+	}
+
+	_, created, err := EnqueueYTDLPUpdate(ctx, store, now)
 	if err != nil {
 		return 0, err
 	}
@@ -1156,6 +1230,69 @@ func (d *Downloader) HandleRetention(ctx context.Context, job jobs.Job) error {
 	}
 
 	return d.setJobResult(ctx, job.ID, result)
+}
+
+func (d *Downloader) HandleYTDLPUpdate(ctx context.Context, job jobs.Job) error {
+	if err := d.requireJobStoreForJob(job); err != nil {
+		return err
+	}
+	result, err := d.UpdateYTDLP(ctx)
+	if err != nil {
+		_ = d.setPartialJobResult(ctx, job.ID, result)
+		return err
+	}
+
+	return d.setJobResult(ctx, job.ID, result)
+}
+
+// YTDLPUpdateResult reports the outcome of an automatic yt-dlp update run.
+type YTDLPUpdateResult struct {
+	Updated   bool   `json:"updated"`
+	Version   string `json:"version,omitempty"`
+	Skipped   bool   `json:"skipped,omitempty"`
+	SkipReason string `json:"skip_reason,omitempty"`
+}
+
+// UpdateYTDLP runs yt-dlp --update-to nightly to keep the bundled binary
+// current against YouTube changes. It skips the run when a download is active
+// so an in-flight transfer is never disturbed. The update is a network call
+// that writes the yt-dlp binary in place, so it bypasses the download pacing
+// used for media downloads.
+func (d *Downloader) UpdateYTDLP(ctx context.Context) (YTDLPUpdateResult, error) {
+	path := d.config.YTDLPPath
+	if path == "" {
+		path = defaultYTDLPPath
+	}
+	if d.store != nil {
+		active, err := d.store.ActiveByType(ctx, JobType, jobs.MaxActiveLookupLimit)
+		if err != nil {
+			return YTDLPUpdateResult{SkipReason: "could not check active downloads"}, err
+		}
+		if len(active) > 0 {
+			return YTDLPUpdateResult{Skipped: true, SkipReason: "download in progress"}, nil
+		}
+	}
+
+	binaryDir, err := commandPath(filepath.Dir(path))
+	if err != nil {
+		return YTDLPUpdateResult{SkipReason: "could not resolve yt-dlp directory"}, err
+	}
+	command := Command{
+		Name:           path,
+		Dir:            binaryDir,
+		Kind:           sandbox.KindYTDLP,
+		Access:         sandbox.Access{ReadWrite: []sandbox.PathGrant{{Path: binaryDir, Kind: sandbox.PathSubtree}}},
+		Network:        sandbox.NetworkAllow,
+		MaxStdoutBytes: maxErrorOutput,
+		Args:           []string{"--update-to", "nightly"},
+	}
+	output, err := d.runner.Run(ctx, command)
+	if err != nil {
+		return YTDLPUpdateResult{SkipReason: "update command failed"}, ytdlpCommandError(command, output, err)
+	}
+
+	status := CheckYTDLP(ctx, path, d.runner)
+	return YTDLPUpdateResult{Updated: status.Available, Version: status.Version}, nil
 }
 
 func (d *Downloader) handlePayload(ctx context.Context, jobID string, payloadJSON string) (ingestResult, error) {

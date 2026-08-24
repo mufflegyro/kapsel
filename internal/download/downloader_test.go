@@ -4564,3 +4564,139 @@ var catalogSyncFixtureMetadata = []byte(`{
     {"id": "vid-4", "url": "https://www.youtube.com/watch?v=vid-4", "title": "Unsafe Thumbnail", "description": "Catalog description", "duration": 60, "upload_date": "20260404", "thumbnail": "https://img.example/unsafe.jpg"}
   ]
 }`)
+
+func TestEnsureYTDLPUpdateJobsEnqueuesObservableJob(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	created, err := EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected one yt-dlp update job, got %d", created)
+	}
+
+	// An active update job suppresses duplicates.
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("expected active update job to suppress duplicates, got %d", created)
+	}
+}
+
+func TestEnsureYTDLPUpdateJobsWrapsAfterInterval(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	now := time.Now().UTC()
+
+	created, err := EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected one update job, got %d", created)
+	}
+
+	// Run the first update job to completion.
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		YTDLPUpdateJobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", JobStore: store}, &sequenceRunner{stdout: [][]byte{[]byte("update ok\n"), []byte("2026.08.24.1\n")}}).HandleYTDLPUpdate,
+	})
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A recent successful update suppresses a new job until the interval elapses.
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Minute) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("expected no update job within interval, got %d", created)
+	}
+
+	// Backdate the latest completed job to before the interval, then a new one is enqueued.
+	if _, err := db.Exec("UPDATE jobs SET created_at = ?", now.Add(-DefaultYTDLPUpdateInterval*2).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Hour) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected a new update job after interval, got %d", created)
+	}
+}
+
+func TestHandleYTDLPUpdateRunsWhenNoDownloadActive(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	runnerCalls := &sequenceRunner{stdout: [][]byte{[]byte("update ok\n"), []byte("2026.08.24.1\n")}}
+	handler := newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", JobStore: store}, runnerCalls).HandleYTDLPUpdate
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{YTDLPUpdateJobType: handler})
+
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{Type: YTDLPUpdateJobType, PayloadJSON: `{}`, MaxAttempts: 1, RunAfter: time.Now().Add(-time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusSucceeded {
+		t.Fatalf("expected succeeded update job, got %#v", stored)
+	}
+
+	args := []string{}
+	for _, c := range runnerCalls.commands {
+		for _, a := range c.Args {
+			args = append(args, a)
+		}
+	}
+	if !slices.Contains(args, "--update-to") || !slices.Contains(args, "nightly") {
+		t.Fatalf("expected update command to pass --update-to nightly, got %#v", args)
+	}
+}
+
+func TestUpdateYTDLPSkipsWhileDownloadActive(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	runnerCalls := &sequenceRunner{stdout: [][]byte{[]byte("should not run\n")}}
+	downloader := newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", JobStore: store}, runnerCalls)
+
+	// Enqueue and claim an active download so the guard sees a running download.
+	active, err := store.Enqueue(context.Background(), jobs.EnqueueParams{Type: JobType, PayloadJSON: `{}`, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.Claim(context.Background(), time.Now().Add(time.Second), time.Hour); err != nil || !ok {
+		t.Fatalf("expected to claim active download, ok=%v err=%v", ok, err)
+	}
+
+	result, err := downloader.UpdateYTDLP(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when skipping, got %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("expected update to be skipped while a download is active, got %#v", result)
+	}
+	if len(runnerCalls.commands) != 0 {
+		t.Fatalf("expected no yt-dlp command to run while a download is active, got %d", len(runnerCalls.commands))
+	}
+	_ = store.Cancel(context.Background(), active.ID)
+}

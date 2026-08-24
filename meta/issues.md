@@ -4,3 +4,5 @@
 - [ ] [Split download worker responsibilities](issues/split-download-worker-responsibilities.md)
 - [ ] [Clarify scheduler job ownership](issues/clarify-scheduler-job-ownership.md)
 - [ ] [Fix YouTube download 403 and raise default to 1080p](issues/fix-youtube-download-403-and-raise-default-to-1080p.md)
+- [ ] [Opt-in retention for manual downloads](issues/opt-in-retention-for-manual-downloads.md)
+- [ ] [Add automatic yt-dlp nightly updates](issues/add-auto-ytdlp-nightly-update.md)

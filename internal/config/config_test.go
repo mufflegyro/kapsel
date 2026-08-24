@@ -55,6 +55,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.YTDLPSleepInterval != download.DefaultYTDLPSleepInterval {
 		t.Fatalf("expected default yt-dlp sleep interval %s, got %s", download.DefaultYTDLPSleepInterval, cfg.YTDLPSleepInterval)
 	}
+	if cfg.YTDLPUpdateInterval != download.DefaultYTDLPUpdateInterval {
+		t.Fatalf("expected default yt-dlp update interval %s, got %s", download.DefaultYTDLPUpdateInterval, cfg.YTDLPUpdateInterval)
+	}
 	if cfg.MinFreeSpaceBytes != diskspace.DefaultMinFreeBytes {
 		t.Fatalf("expected default free-space headroom %d, got %d", diskspace.DefaultMinFreeBytes, cfg.MinFreeSpaceBytes)
 	}
@@ -131,6 +134,7 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 		"KAPSEL_YTDLP_PATH":            "/usr/local/bin/yt-dlp",
 		"KAPSEL_YTDLP_COOKIES_FILE":    "/etc/kapsel/youtube.cookies.txt",
 		"KAPSEL_YTDLP_SLEEP_INTERVAL":  "30s",
+		"KAPSEL_YTDLP_UPDATE_INTERVAL": "12h",
 		"KAPSEL_MIN_FREE_SPACE":        "2GiB",
 		"KAPSEL_PREVIEWS_ENABLED":      "true",
 		"KAPSEL_SPONSORBLOCK_ENABLED":  "false",
@@ -176,6 +180,9 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.YTDLPSleepInterval != 30*time.Second {
 		t.Fatalf("unexpected yt-dlp sleep interval %s", cfg.YTDLPSleepInterval)
+	}
+	if cfg.YTDLPUpdateInterval != 12*time.Hour {
+		t.Fatalf("unexpected yt-dlp update interval %s", cfg.YTDLPUpdateInterval)
 	}
 	if cfg.MinFreeSpaceBytes != 2<<30 {
 		t.Fatalf("unexpected free-space headroom %d", cfg.MinFreeSpaceBytes)

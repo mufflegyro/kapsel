@@ -68,6 +68,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		download.ChannelScanJobType:         downloader.HandleChannelScan,
 		download.ChannelAutoDownloadJobType: downloader.HandleChannelAutoDownload,
 		download.RetentionJobType:           downloader.HandleRetention,
+		download.YTDLPUpdateJobType:         downloader.HandleYTDLPUpdate,
 		previews.JobType:                    previewer.Handle,
 		taimport.JobType:                    taImporter.Handle,
 	})
@@ -120,8 +121,27 @@ func (a *App) RunJobs(ctx context.Context) error {
 	}
 	go a.runChannelAutoDownloadScheduler(ctx, time.Hour)
 	go a.runRetentionScheduler(ctx, time.Hour)
+	go a.runYTDLPUpdateScheduler(ctx, time.Hour)
 
 	return a.Runner.RunLoop(ctx, time.Second)
+}
+
+func (a *App) runYTDLPUpdateScheduler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if _, err := download.EnsureYTDLPUpdateJobs(ctx, a.DB, a.Jobs, download.YTDLPUpdateScheduleOptions{Interval: a.Config.YTDLPUpdateInterval}); err != nil && ctx.Err() == nil {
+			slog.Error("yt-dlp update scheduler failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *App) runChannelAutoDownloadScheduler(ctx context.Context, interval time.Duration) {

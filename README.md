@@ -70,6 +70,8 @@ Common settings:
 - `KAPSEL_MEDIA_SIGNING_SECRET`: secret used to sign media URLs.
 - `KAPSEL_YTDLP_PATH`: path to `yt-dlp`, default `yt-dlp`.
 - `KAPSEL_YTDLP_COOKIES_FILE`: optional Netscape `cookies.txt` path for authenticated `yt-dlp` requests. Treat it like a password and keep it outside the repo.
+- `KAPSEL_YTDLP_SLEEP_INTERVAL`: randomized pacing between yt-dlp calls, default `10s`.
+- `KAPSEL_YTDLP_UPDATE_INTERVAL`: how often to auto-update `yt-dlp` to the latest nightly, default `24h`. Set to `0s` to disable automatic updates.
 - `KAPSEL_FFMPEG_PATH`: path to `ffmpeg`, default `ffmpeg`.
 
 Generate a password hash without putting the password in shell history:
