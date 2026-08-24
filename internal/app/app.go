@@ -64,6 +64,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	taImporter := taimport.NewJobHandler(db, jobStore, cfg.ImportRoot).WithDiskSpace(cfg.DataDir, cfg.MinFreeSpaceBytes, nil)
 	runner := jobs.NewRunner(jobStore, map[string]jobs.Handler{
 		download.JobType:                    downloader.Handle,
+		download.VideoMetadataScanJobType:   downloader.HandleVideoMetadataScan,
 		download.ChannelJobType:             downloader.HandleChannelFirst,
 		download.ChannelScanJobType:         downloader.HandleChannelScan,
 		download.ChannelAutoDownloadJobType: downloader.HandleChannelAutoDownload,

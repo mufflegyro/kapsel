@@ -1928,6 +1928,7 @@
     if (value === 'channel_first_download') return 'Add channel';
     if (value === 'channel_scan') return 'Channel scan';
     if (value === 'channel_auto_download') return 'Channel auto-download';
+    if (value === 'video_metadata_scan') return 'Video metadata scan';
     if (value === 'timeline_preview') return 'Timeline preview';
     if (value === 'ta_import') return 'TubeArchivist import';
     return String(value || 'job').replaceAll('_', ' ');

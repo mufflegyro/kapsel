@@ -290,18 +290,20 @@ func runImportSubscriptions(ctx context.Context, cfg config.Config, args []strin
 }
 
 func runImportPlaylists(ctx context.Context, cfg config.Config, args []string, stdout io.Writer, stderr io.Writer) int {
-	downloadMissing := false
+	mode := playlistimport.ModeMetadataScan
 	filtered := []string{}
 	for _, arg := range args {
 		switch arg {
 		case "--download":
-			downloadMissing = true
+			mode = playlistimport.ModeDownload
+		case "--link-only":
+			mode = playlistimport.ModeLinkOnly
 		default:
 			filtered = append(filtered, arg)
 		}
 	}
 	if len(filtered) < 1 {
-		fmt.Fprintln(stderr, "usage: kapsel import-playlists [--download] <playlist.csv>...")
+		fmt.Fprintln(stderr, "usage: kapsel import-playlists [--download|--link-only] <playlist.csv>...")
 		return 2
 	}
 	application, err := app.New(ctx, cfg)
@@ -313,7 +315,7 @@ func runImportPlaylists(ctx context.Context, cfg config.Config, args []string, s
 
 	total := playlistimport.Report{Playlists: 0}
 	for _, path := range filtered {
-		report, err := playlistimport.ImportFile(ctx, application.DB, application.Jobs, path, downloadMissing)
+		report, err := playlistimport.ImportFile(ctx, application.DB, application.Jobs, path, mode)
 		if err != nil {
 			fmt.Fprintf(stderr, "playlist import %q failed: %v\n", path, err)
 			return 1

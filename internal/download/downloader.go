@@ -37,6 +37,7 @@ const (
 	ChannelAutoDownloadJobType      = "channel_auto_download"
 	RetentionJobType                = "retention_cleanup"
 	YTDLPUpdateJobType              = "ytdlp_update"
+	VideoMetadataScanJobType        = "video_metadata_scan"
 	DownloadOriginManual            = "manual"
 	DownloadOriginChannelAuto       = "channel_auto"
 	MediaOriginImported             = "imported"
@@ -396,6 +397,66 @@ func EnqueueDownload(ctx context.Context, store *jobs.Store, payload Payload) (j
 	})
 
 	return job, err
+}
+
+// EnqueueVideoMetadataScan enqueues a metadata-only job for a single video
+// URL. The job fetches the video's catalog metadata (title, channel,
+// thumbnail, duration) without downloading media, so a later playlist or
+// channel import can link the catalog row. It is deduplicated per URL against
+// queued/running metadata scans and full downloads.
+func EnqueueVideoMetadataScan(ctx context.Context, store *jobs.Store, payload Payload) (jobs.Job, error) {
+	if store == nil {
+		return jobs.Job{}, errors.New("video metadata scan enqueue missing job store")
+	}
+	payload, payloadJSON, err := canonicalDownloadPayload(payload)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	job, _, err := store.FindOrEnqueue(ctx, jobs.EnqueueParams{Type: VideoMetadataScanJobType, PayloadJSON: payloadJSON}, func(ctx context.Context, tx *sql.Tx) (jobs.Job, bool, error) {
+		return activeMetadataScanOrDownloadForURL(ctx, store, tx, payload.URL)
+	})
+
+	return job, err
+}
+
+func activeMetadataScanOrDownloadForURL(ctx context.Context, store *jobs.Store, tx *sql.Tx, url string) (jobs.Job, bool, error) {
+	for _, jobType := range []string{VideoMetadataScanJobType, JobType} {
+		if job, active, err := activeJobForURLType(ctx, store, tx, url, jobType); err != nil || active {
+			return job, active, err
+		}
+	}
+
+	return jobs.Job{}, false, nil
+}
+
+func activeJobForURLType(ctx context.Context, store *jobs.Store, tx *sql.Tx, url string, jobType string) (jobs.Job, bool, error) {
+	if store == nil {
+		return jobs.Job{}, false, nil
+	}
+	normalized, err := NormalizeDownloadURL(url)
+	if err != nil {
+		return jobs.Job{}, false, err
+	}
+	var activeJobs []jobs.Job
+	if tx != nil {
+		activeJobs, err = store.ActiveByTypeWithoutCancelRequestedTx(ctx, tx, jobType, jobs.MaxActiveLookupLimit)
+	} else {
+		activeJobs, err = store.ActiveByType(ctx, jobType, jobs.MaxActiveLookupLimit)
+	}
+	if err != nil {
+		return jobs.Job{}, false, err
+	}
+	for _, job := range activeJobs {
+		var existing Payload
+		if err := json.Unmarshal([]byte(job.PayloadJSON), &existing); err != nil {
+			continue
+		}
+		if existing.URL == normalized {
+			return job, true, nil
+		}
+	}
+
+	return jobs.Job{}, false, nil
 }
 
 func enqueueDownloadTx(ctx context.Context, store *jobs.Store, tx *sql.Tx, payload Payload, includeCancelRequested bool) (jobs.Job, bool, error) {
@@ -1091,6 +1152,41 @@ func (d *Downloader) BuildOriginalAutomaticSubtitleCommand(rawURL string) (Comma
 	}, nil
 }
 
+// BuildVideoMetadataScanCommand builds a metadata-only yt-dlp command for a
+// single video: it fetches the catalog metadata (title, channel, thumbnail,
+// duration, view count) without downloading or writing any media. This is the
+// single-video equivalent of the channel scan path and is used by the
+// video_metadata_scan job so playlist imports can populate the catalog without
+// transferring media.
+func (d *Downloader) BuildVideoMetadataScanCommand(rawURL string) (Command, error) {
+	downloadURL, err := NormalizeDownloadURL(rawURL)
+	if err != nil {
+		return Command{}, err
+	}
+	mediaRoot, cookiesFile, err := d.ytdlpSandboxPaths()
+	if err != nil {
+		return Command{}, err
+	}
+
+	return Command{
+		Name:    d.config.YTDLPPath,
+		Dir:     mediaRoot,
+		Kind:    sandbox.KindYTDLP,
+		Access:  d.ytdlpAccess(mediaRoot, cookiesFile, false),
+		Network: sandbox.NetworkAllow,
+		Args: d.ytdlpArgs(cookiesFile,
+			"--no-playlist",
+			"--no-simulate",
+			"--skip-download",
+			"--dump-single-json",
+			"--no-write-info-json",
+			"--no-write-thumbnail",
+			"--no-write-subs",
+			downloadURL,
+		),
+	}, nil
+}
+
 func (d *Downloader) BuildChannelFirstCommand(rawURL string) (Command, error) {
 	return d.BuildChannelCatalogPageCommand(rawURL, 1, DefaultChannelCatalogLimit)
 }
@@ -1486,6 +1582,55 @@ func (d *Downloader) HandleChannelFirst(ctx context.Context, job jobs.Job) error
 	return d.finishChannelFirstJob(ctx, job.ID, catalogResult, videoURL)
 }
 
+func (d *Downloader) HandleVideoMetadataScan(ctx context.Context, job jobs.Job) error {
+	if d.db == nil {
+		return errors.New("video metadata scan handler missing database")
+	}
+	if err := d.requireJobStoreForJob(job); err != nil {
+		return err
+	}
+
+	var payload Payload
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		return err
+	}
+	if err := d.ensureDiskSpace(); err != nil {
+		return err
+	}
+	command, err := d.BuildVideoMetadataScanCommand(payload.URL)
+	if err != nil {
+		return err
+	}
+	output, err := d.runYTDLP(ctx, command)
+	if err != nil {
+		return ytdlpJobError(command, output, err)
+	}
+	value, err := parseDownloadMetadataOutput(output, false)
+	if err != nil {
+		return err
+	}
+	video := catalogVideoFromMetadata(value)
+	if video.ID == "" {
+		return errors.New("video metadata scan returned no usable video id")
+	}
+
+	if video.ChannelID != "" {
+		if err := d.upsertChannel(ctx, d.db, video.ChannelID, video.ChannelName, "", ""); err != nil {
+			return err
+		}
+	}
+	if err := d.upsertCatalogVideo(ctx, d.db, video); err != nil {
+		return err
+	}
+
+	return d.setJobResult(ctx, job.ID, videoMetadataScanResult{
+		VideoID:     video.ID,
+		Title:       video.Title,
+		ChannelID:   video.ChannelID,
+		ChannelName: video.ChannelName,
+	})
+}
+
 func (d *Downloader) HandleChannelScan(ctx context.Context, job jobs.Job) error {
 	if d.db == nil {
 		return errors.New("channel scan handler missing database")
@@ -1852,6 +1997,13 @@ type channelAutoDownloadResult struct {
 	DownloadsQueued int    `json:"downloads_queued"`
 	Skipped         bool   `json:"skipped,omitempty"`
 	Incomplete      bool   `json:"incomplete,omitempty"`
+}
+
+type videoMetadataScanResult struct {
+	VideoID     string `json:"video_id"`
+	Title       string `json:"title,omitempty"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	ChannelName string `json:"channel_name,omitempty"`
 }
 
 type channelFirstResult struct {
@@ -2228,6 +2380,44 @@ func appendCatalogVideos(videos *[]catalogVideo, seen map[string]struct{}, entri
 	}
 }
 
+// catalogVideoFromMetadata builds a catalog video row from a single-video
+// metadata dump (the shape produced by --dump-single-json). It mirrors
+// catalogVideoFromEntry for the playlist metadata-scan path, where a whole
+// video object is available instead of a flat playlist entry.
+func catalogVideoFromMetadata(value metadata) catalogVideo {
+	videoID := strings.TrimSpace(value.ID)
+	if !isLikelyYouTubeVideoID(videoID) {
+		if normalized, err := NormalizeYouTubeVideoURL(value.WebpageURL); err == nil {
+			videoID = videoIDFromWatchURL(normalized)
+		}
+	}
+	if !isLikelyYouTubeVideoID(videoID) {
+		return catalogVideo{}
+	}
+	title := strings.TrimSpace(firstNonEmpty(value.Title, videoID))
+	description := strings.TrimSpace(value.Description)
+	if !isSafeMetadataValue(title) || !isSafeMetadataText(description) {
+		return catalogVideo{}
+	}
+	channelID := firstNonEmpty(value.ChannelID, value.UploaderID)
+	channelName := firstNonEmpty(value.Channel, value.Uploader, channelID)
+
+	viewCount, hasViewCount := viewCountValue(value.ViewCount)
+
+	return catalogVideo{
+		ID:              videoID,
+		Title:           title,
+		Description:     description,
+		PublishedAt:     catalogUploadDate(value.UploadDate),
+		DurationSeconds: durationSeconds(value.Duration),
+		ViewCount:       viewCount,
+		HasViewCount:    hasViewCount,
+		ThumbnailURL:    catalogThumbnailURL(value.Thumbnail, value.Thumbnails),
+		ChannelID:       channelID,
+		ChannelName:     channelName,
+	}
+}
+
 func catalogVideoFromEntry(entry channelEntry, channelID string, channelName string) (catalogVideo, bool) {
 	videoID := channelEntryVideoID(entry)
 	if videoID == "" {
@@ -2286,6 +2476,14 @@ func catalogPublishedAt(entry channelEntry) string {
 	}
 	if entry.Timestamp > 0 {
 		return time.Unix(entry.Timestamp, 0).UTC().Format("2006-01-02")
+	}
+
+	return ""
+}
+
+func catalogUploadDate(uploadDate string) string {
+	if len(uploadDate) == 8 {
+		return uploadDate[0:4] + "-" + uploadDate[4:6] + "-" + uploadDate[6:8]
 	}
 
 	return ""

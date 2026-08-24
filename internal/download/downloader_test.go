@@ -150,6 +150,62 @@ func TestBuildCommandsResolveRelativeSandboxPaths(t *testing.T) {
 	}
 }
 
+func TestBuildVideoMetadataScanCommand(t *testing.T) {
+	t.Parallel()
+
+	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media"}, nil)
+	command, err := downloader.BuildVideoMetadataScanCommand("https://www.youtube.com/watch?v=abc123DEF45")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, arg := range []string{"--skip-download", "--dump-single-json", "https://www.youtube.com/watch?v=abc123DEF45"} {
+		if !slices.Contains(command.Args, arg) {
+			t.Fatalf("expected metadata scan arg %q in %#v", arg, command.Args)
+		}
+	}
+	for _, forbidden := range []string{"--write-subs", "--write-auto-subs", "--write-thumbnail", "--write-info-json"} {
+		if slices.Contains(command.Args, forbidden) {
+			t.Fatalf("metadata scan must not %q: %#v", forbidden, command.Args)
+		}
+	}
+}
+
+func TestHandleVideoMetadataScanUpsertsCatalogRow(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	downloader := newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{stdout: metadataScanFixture})
+
+	if _, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        VideoMetadataScanJobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/watch?v=abc123DEF45"}`,
+		MaxAttempts: 1,
+		RunAfter:    time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		VideoMetadataScanJobType: downloader.HandleVideoMetadataScan,
+	})
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var id, title, channelID string
+	var mediaPath any
+	if err := db.QueryRow("SELECT id, title, channel_id, media_path FROM videos WHERE external_id = 'abc123DEF45'").Scan(&id, &title, &channelID, &mediaPath); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Kapsel Demo" || channelID != "chan-1" {
+		t.Fatalf("unexpected catalog row: id=%s title=%q channel=%q", id, title, channelID)
+	}
+	if mediaPath != nil && mediaPath != "" {
+		t.Fatalf("expected metadata scan to leave media_path empty, got %v", mediaPath)
+	}
+}
+
 func TestBuildCommandsIgnoreImplicitYTDLPConfig(t *testing.T) {
 	t.Parallel()
 
@@ -4523,6 +4579,19 @@ func writeDownloadFile(t *testing.T, mediaRoot string, name string, body string)
 		t.Fatal(err)
 	}
 }
+
+var metadataScanFixture = []byte(`{
+  "id": "abc123DEF45",
+  "title": "Kapsel Demo",
+  "description": "A downloaded demo",
+  "duration": 120,
+  "view_count": 1234,
+  "upload_date": "20260503",
+  "channel_id": "chan-1",
+  "channel": "Archive Workshop",
+  "webpage_url": "https://www.youtube.com/watch?v=abc123DEF45",
+  "thumbnail": "https://example.com/thumb.jpg"
+}`)
 
 var fixtureMetadata = []byte(`{
   "id": "vid-1",

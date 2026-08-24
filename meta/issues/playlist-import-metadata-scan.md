@@ -11,23 +11,29 @@ media_path NULL) with a later "Download" button, without transferring media.
 
 ## Requirements
 
-- Add a `--scan-missing` (or similar) flag to `kapsel import-playlists` that,
-  for each video missing from the archive, enqueues a metadata-only job
-  instead of a media download.
+- **Default behavior change:** `kapsel import-playlists <file>.csv` enqueues a
+  metadata-only job for each video missing from the archive (no media
+  download), so missing playlist videos become linkable catalog rows.
+- Add a `--link-only` flag that preserves the old default (link existing
+  videos, report missing, enqueue nothing).
+- Add a `--download` flag (existing) that enqueues a full media download for
+  each missing video instead of a metadata scan.
 - The metadata job runs yt-dlp with a skip-download, dump-single-json style
   command (as the channel scan path does), upserts a catalog video row
   (`media_path` NULL, catalog/media origin), and links the playlist entry so a
   re-run of the import links it.
 - Failed metadata fetches are reported in the import/scan report and do not
   abort the remaining entries.
-- Existing behavior is unchanged: default stays link-only, `--download` still
-  enqueues full downloads.
 
 ## Acceptance Criteria
 
-- `kapsel import-playlists --scan-missing <playlist>.csv` creates the playlist,
+- `kapsel import-playlists <playlist>.csv` (no flags) creates the playlist,
   links videos already in the archive, enqueues metadata-only jobs for the
   missing videos, and does not download any media.
+- `kapsel import-playlists --link-only <playlist>.csv` keeps the previous
+  behavior: link existing videos, report missing, enqueue nothing.
+- `kapsel import-playlists --download <playlist>.csv` enqueues full media
+  downloads for missing videos.
 - After the metadata jobs complete, re-running the import links the previously
   missing videos (playlist_entries rows are created).
 - Playlist view shows the scanned videos with metadata and a download action.

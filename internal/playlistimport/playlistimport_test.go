@@ -94,7 +94,7 @@ VALUES ('v1', 'youtube', 'CtCgNRquauE', 'chan-1', 'Video One', 60),
 		t.Fatal(err)
 	}
 
-	report, err := ImportFile(context.Background(), db, store, path, false)
+	report, err := ImportFile(context.Background(), db, store, path, ModeLinkOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,12 +149,12 @@ VALUES ('v1', 'youtube', 'CtCgNRquauE', 'chan-1', 'Video One', 60),
 	}
 
 	write("CtCgNRquauE\nArj1LYD4ano\n")
-	if _, err := ImportFile(context.Background(), db, store, path, false); err != nil {
+	if _, err := ImportFile(context.Background(), db, store, path, ModeLinkOnly); err != nil {
 		t.Fatal(err)
 	}
 	// Re-import with a different set: entries must be replaced, not added to.
 	write("Arj1LYD4ano\n")
-	if _, err := ImportFile(context.Background(), db, store, path, false); err != nil {
+	if _, err := ImportFile(context.Background(), db, store, path, ModeLinkOnly); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +178,7 @@ func TestImportEnqueuesDownloadsForMissingVideos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := ImportFile(context.Background(), db, store, path, true)
+	report, err := ImportFile(context.Background(), db, store, path, ModeDownload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,5 +192,95 @@ func TestImportEnqueuesDownloadsForMissingVideos(t *testing.T) {
 	}
 	if jobCount != 1 {
 		t.Fatalf("expected 1 video download job, got %d", jobCount)
+	}
+}
+
+func TestImportDefaultEnqueuesMetadataScansForMissingVideos(t *testing.T) {
+	t.Parallel()
+
+	db := openDB(t)
+	store := jobs.NewStore(db)
+
+	path := filepath.Join(t.TempDir(), "playlist.csv")
+	if err := os.WriteFile(path, []byte("Video ID\nCtCgNRquauE\nAAAAbbbbCCC\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ImportFile(context.Background(), db, store, path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Linked != 0 || report.Missing != 2 || report.Enqueued != 2 {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "video_metadata_scan").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 2 {
+		t.Fatalf("expected 2 video metadata scan jobs, got %d", jobCount)
+	}
+}
+
+func TestImportMetadataScanIsIdempotentPerURL(t *testing.T) {
+	t.Parallel()
+
+	db := openDB(t)
+	store := jobs.NewStore(db)
+
+	path := filepath.Join(t.TempDir(), "playlist.csv")
+	write := func() {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("Video ID\nCtCgNRquauE\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write()
+	if _, err := ImportFile(context.Background(), db, store, path, ModeMetadataScan); err != nil {
+		t.Fatal(err)
+	}
+	// Re-importing the same file must not enqueue a second scan job for the
+	// same URL while the first is still queued/running.
+	write()
+	if _, err := ImportFile(context.Background(), db, store, path, ModeMetadataScan); err != nil {
+		t.Fatal(err)
+	}
+
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "video_metadata_scan").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected 1 metadata scan job after re-import, got %d", jobCount)
+	}
+}
+
+func TestImportLinkOnlyDoesNotEnqueueJobs(t *testing.T) {
+	t.Parallel()
+
+	db := openDB(t)
+	store := jobs.NewStore(db)
+
+	path := filepath.Join(t.TempDir(), "playlist.csv")
+	if err := os.WriteFile(path, []byte("Video ID\nCtCgNRquauE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ImportFile(context.Background(), db, store, path, ModeLinkOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Enqueued != 0 || report.Missing != 1 {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected no jobs enqueued, got %d", jobCount)
 	}
 }

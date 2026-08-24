@@ -105,6 +105,22 @@ func headerIndex(fields []string) map[string]int {
 	return index
 }
 
+// Mode controls what happens to playlist videos that are missing from the
+// archive after linking the ones already present.
+type Mode string
+
+const (
+	// ModeMetadataScan (default) enqueues a metadata-only job for each missing
+	// video so it becomes a catalog row that a later re-run can link. No media
+	// is downloaded.
+	ModeMetadataScan Mode = "metadata-scan"
+	// ModeLinkOnly links existing videos and reports the rest as missing
+	// without enqueuing anything.
+	ModeLinkOnly Mode = "link-only"
+	// ModeDownload enqueues a full media download for each missing video.
+	ModeDownload Mode = "download"
+)
+
 // Report summarizes a playlist CSV import.
 type Report struct {
 	Playlists int      `json:"playlists"`
@@ -117,10 +133,9 @@ type Report struct {
 
 // ImportFile parses the playlist export at path, creates or updates the
 // playlist named after the file base, and links every video already present
-// in the archive. When downloadMissing is true, a direct-video download job is
-// enqueued for each missing video so a later re-run can link it. It returns a
-// report.
-func ImportFile(ctx context.Context, db *sql.DB, store *jobs.Store, path string, downloadMissing bool) (Report, error) {
+// in the archive. Videos missing from the archive are handled according to
+// mode (see Mode). It returns a report.
+func ImportFile(ctx context.Context, db *sql.DB, store *jobs.Store, path string, mode Mode) (Report, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Report{}, err
@@ -132,14 +147,17 @@ func ImportFile(ctx context.Context, db *sql.DB, store *jobs.Store, path string,
 		return Report{}, err
 	}
 
-	return ImportEntries(ctx, db, store, path, entries, downloadMissing)
+	return ImportEntries(ctx, db, store, path, entries, mode)
 }
 
 // ImportEntries links parsed entries into a playlist named after the file base
 // name of path. It is split from ImportFile so tests can drive it directly.
-func ImportEntries(ctx context.Context, db *sql.DB, store *jobs.Store, path string, entries []Entry, downloadMissing bool) (Report, error) {
+func ImportEntries(ctx context.Context, db *sql.DB, store *jobs.Store, path string, entries []Entry, mode Mode) (Report, error) {
 	if db == nil {
 		return Report{}, errors.New("playlist import missing database")
+	}
+	if mode == "" {
+		mode = ModeMetadataScan
 	}
 	report := Report{Playlists: 1}
 
@@ -187,18 +205,27 @@ VALUES (?, ?, ?)`, playlistID, videoID, position); err != nil {
 
 	report.Missing = len(missing)
 	report.Skipped = len(entries) - report.Linked - report.Missing
-	if downloadMissing {
-		enqueued := 0
-		for _, videoID := range missing {
-			payload := download.Payload{URL: "https://www.youtube.com/watch?v=" + videoID}
+	if len(missing) == 0 || mode == ModeLinkOnly {
+		return report, nil
+	}
+
+	enqueued := 0
+	for _, videoID := range missing {
+		payload := download.Payload{URL: "https://www.youtube.com/watch?v=" + videoID}
+		if mode == ModeDownload {
 			if _, err := download.EnqueueDownload(ctx, store, payload); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("enqueue video %s: %v", videoID, err))
 				continue
 			}
-			enqueued++
+		} else {
+			if _, err := download.EnqueueVideoMetadataScan(ctx, store, payload); err != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("enqueue metadata scan %s: %v", videoID, err))
+				continue
+			}
 		}
-		report.Enqueued = enqueued
+		enqueued++
 	}
+	report.Enqueued = enqueued
 
 	return report, nil
 }
