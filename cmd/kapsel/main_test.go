@@ -22,6 +22,7 @@ import (
 	"kapsel/internal/config"
 	"kapsel/internal/database"
 	"kapsel/internal/storage"
+	"kapsel/internal/subsimport"
 	"kapsel/internal/taimport"
 )
 
@@ -59,6 +60,45 @@ func TestRunImportTACommand(t *testing.T) {
 	assertCommandScalar(t, db, "SELECT title FROM videos WHERE id = ?", "Kapsel Demo", "vid-1")
 	assertCommandScalar(t, db, "SELECT position_seconds FROM user_progress WHERE video_id = ?", int64(42), "vid-1")
 }
+
+func TestRunImportSubscriptionsCommand(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	csvPath := filepath.Join(t.TempDir(), "subscriptions.csv")
+	csvData := "Channel Id,Channel Url,Channel Title\n" +
+		"UCAAAA,https://www.youtube.com/channel/UCAAAA,Channel A\n" +
+		"UCBBBB,https://www.youtube.com/channel/UCBBBB,Channel B\n"
+	if err := os.WriteFile(csvPath, []byte(csvData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Addr:               "127.0.0.1:0",
+		DataDir:            dataDir,
+		DBPath:             filepath.Join(dataDir, "kapsel.db"),
+		MediaRoot:          filepath.Join(dataDir, "media"),
+		MediaSigningSecret: "secret",
+		YTDLPPath:          "yt-dlp",
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := runWithConfig(context.Background(), cfg, []string{"import-subscriptions", csvPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d stderr=%q", code, stderr.String())
+	}
+	var report subsimport.Report
+	if err := json.NewDecoder(&stdout).Decode(&report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Parsed != 2 || report.Enqueued != 2 {
+		t.Fatalf("unexpected import report: %#v", report)
+	}
+
+	db := openCommandDB(t, cfg.DBPath)
+	assertCommandScalar(t, db, "SELECT count(*) FROM jobs WHERE type = ?", int64(2), "channel_first_download")
+}
+
 
 func TestRunHashPasswordCommand(t *testing.T) {
 	t.Parallel()

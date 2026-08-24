@@ -6,3 +6,4 @@
 - [ ] [Fix YouTube download 403 and raise default to 1080p](issues/fix-youtube-download-403-and-raise-default-to-1080p.md)
 - [ ] [Opt-in retention for manual downloads](issues/opt-in-retention-for-manual-downloads.md)
 - [ ] [Add automatic yt-dlp nightly updates](issues/add-auto-ytdlp-nightly-update.md)
+- [ ] [Import subscriptions from Google Takeout subscriptions.csv](issues/import-subscriptions-csv.md)

@@ -140,6 +140,16 @@ Kapsel can import core metadata from TubeArchivist backups:
 
 The importer reads TubeArchivist backup JSON from `cache/backup`, `backup`, or the provided root directory. It imports channels, videos, playlists, comments, search text, playback progress, and media references where available.
 
+## Importing Subscriptions
+
+Kapsel can add a list of channels from a Google Takeout `subscriptions.csv` export, queueing the channel-first download flow for each channel:
+
+```sh
+./dist/kapsel import-subscriptions /path/to/subscriptions.csv
+```
+
+The importer reads the `Channel Url` (and/or `Channel Id`) columns, normalizes each channel URL, and enqueues a channel-first download job per channel, marking each channel subscribed for automatic downloads.
+
 ## Backups
 
 Create and restore metadata backups with:

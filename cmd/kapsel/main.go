@@ -23,6 +23,7 @@ import (
 	"kapsel/internal/database"
 	"kapsel/internal/diskspace"
 	"kapsel/internal/storage"
+	"kapsel/internal/subsimport"
 	"kapsel/internal/taimport"
 )
 
@@ -44,6 +45,8 @@ func runWithConfig(ctx context.Context, cfg config.Config, args []string, stdin 
 			return runHashPassword(args[1:], stdin, stdout, stderr)
 		case "import-ta":
 			return runImportTA(ctx, cfg, args[1:], stdout, stderr)
+		case "import-subscriptions":
+			return runImportSubscriptions(ctx, cfg, args[1:], stdout, stderr)
 		case "backup":
 			return runBackup(ctx, cfg, args[1:], stdout, stderr)
 		case "restore":
@@ -238,6 +241,31 @@ func runImportTA(ctx context.Context, cfg config.Config, args []string, stdout i
 	report, err := taimport.Import(ctx, application.DB, args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "TubeArchivist import failed: %v\n", err)
+		return 1
+	}
+	if err := json.NewEncoder(stdout).Encode(report); err != nil {
+		fmt.Fprintf(stderr, "failed to write import report: %v\n", err)
+		return 1
+	}
+
+	return 0
+}
+
+func runImportSubscriptions(ctx context.Context, cfg config.Config, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: kapsel import-subscriptions <subscriptions.csv>")
+		return 2
+	}
+	application, err := app.New(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "application setup failed: %v\n", err)
+		return 1
+	}
+	defer application.Close()
+
+	report, err := subsimport.ImportFile(ctx, application.Jobs, args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "subscriptions import failed: %v\n", err)
 		return 1
 	}
 	if err := json.NewEncoder(stdout).Encode(report); err != nil {
