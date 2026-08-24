@@ -252,8 +252,18 @@ func runImportTA(ctx context.Context, cfg config.Config, args []string, stdout i
 }
 
 func runImportSubscriptions(ctx context.Context, cfg config.Config, args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: kapsel import-subscriptions <subscriptions.csv>")
+	scanOnly := false
+	filtered := []string{}
+	for _, arg := range args {
+		switch arg {
+		case "--scan-only":
+			scanOnly = true
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	if len(filtered) != 1 {
+		fmt.Fprintln(stderr, "usage: kapsel import-subscriptions [--scan-only] <subscriptions.csv>")
 		return 2
 	}
 	application, err := app.New(ctx, cfg)
@@ -263,7 +273,7 @@ func runImportSubscriptions(ctx context.Context, cfg config.Config, args []strin
 	}
 	defer application.Close()
 
-	report, err := subsimport.ImportFile(ctx, application.Jobs, args[0])
+	report, err := subsimport.ImportFile(ctx, application.Jobs, filtered[0], scanOnly)
 	if err != nil {
 		fmt.Fprintf(stderr, "subscriptions import failed: %v\n", err)
 		return 1

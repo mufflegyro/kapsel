@@ -362,8 +362,9 @@ type Downloader struct {
 }
 
 type Payload struct {
-	URL    string `json:"url"`
-	Origin string `json:"origin,omitempty"`
+	URL       string `json:"url"`
+	Origin    string `json:"origin,omitempty"`
+	ScanOnly  bool   `json:"scan_only,omitempty"`
 }
 
 func NormalizeDownloadPayload(payload Payload) (Payload, error) {
@@ -1424,6 +1425,9 @@ func (d *Downloader) HandleChannelFirst(ctx context.Context, job jobs.Job) error
 	catalogResult, err := d.syncChannelCatalog(ctx, output, "")
 	if err != nil {
 		return err
+	}
+	if payload.ScanOnly {
+		return d.finishChannelFirstScanOnlyJob(ctx, job.ID, catalogResult)
 	}
 	videoURL, err := firstChannelVideoURL(output)
 	if err != nil {
@@ -2684,6 +2688,33 @@ func (d *Downloader) finishChannelFirstJob(ctx context.Context, jobID string, ca
 		FirstVideoURL: firstVideoURL,
 		DownloadJobID: downloadJob.ID,
 		Catalog:       catalogResult,
+	}
+	if err := d.setJobResultTx(ctx, tx, jobID, result); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (d *Downloader) finishChannelFirstScanOnlyJob(ctx context.Context, jobID string, catalogResult channelCatalogResult) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if catalogResult.ChannelID != "" {
+		if err := d.markChannelSubscribed(ctx, tx, catalogResult.ChannelID); err != nil {
+			return err
+		}
+		if err := d.markChannelScanned(ctx, tx, catalogResult.ChannelID); err != nil {
+			return err
+		}
+	}
+	result := channelFirstResult{
+		ChannelID: catalogResult.ChannelID,
+		Videos:    catalogResult.Videos,
+		Catalog:   catalogResult,
 	}
 	if err := d.setJobResultTx(ctx, tx, jobID, result); err != nil {
 		return err

@@ -4700,3 +4700,38 @@ func TestUpdateYTDLPSkipsWhileDownloadActive(t *testing.T) {
 	}
 	_ = store.Cancel(context.Background(), active.ID)
 }
+
+func TestChannelFirstScanOnlyDoesNotEnqueueDownload(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        ChannelJobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/@archive","scan_only":true}`,
+		MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		ChannelJobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, &sequenceRunner{stdout: [][]byte{catalogSyncFixtureMetadata}}).HandleChannelFirst,
+	})
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusSucceeded {
+		t.Fatalf("expected succeeded channel job, got %#v", stored)
+	}
+
+	// Channel is marked subscribed, but no download job is enqueued.
+	assertScalar(t, db, "SELECT count(*) FROM downloads", int64(0))
+	assertScalar(t, db, "SELECT count(*) FROM jobs WHERE type = ?", int64(0), JobType)
+	assertScalar(t, db, "SELECT subscribed FROM channels WHERE id = ?", int64(1), "chan-1")
+	assertScalar(t, db, "SELECT count(*) FROM videos", int64(4))
+}

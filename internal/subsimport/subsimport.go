@@ -80,9 +80,11 @@ func Parse(r io.Reader) ([]Entry, error) {
 
 // EnqueueChannels normalizes and enqueues a channel-first download job for
 // each entry, mirroring the manual add-channel flow so channels are marked
-// subscribed for automatic downloads. It returns the number successfully
-// enqueued and the error for the first invalid entry encountered.
-func EnqueueChannels(ctx context.Context, store *jobs.Store, entries []Entry) (int, error) {
+// subscribed for automatic downloads. scanOnly skips the first-video download,
+// adding the channel and its catalog to the library without fetching media.
+// It returns the number successfully enqueued and the error for the first
+// invalid entry encountered.
+func EnqueueChannels(ctx context.Context, store *jobs.Store, entries []Entry, scanOnly bool) (int, error) {
 	if store == nil {
 		return 0, errors.New("subscriptions import missing job store")
 	}
@@ -102,7 +104,7 @@ func EnqueueChannels(ctx context.Context, store *jobs.Store, entries []Entry) (i
 			// Skip malformed rows rather than failing the whole import.
 			continue
 		}
-		if _, err := download.EnqueueChannelFirst(ctx, store, download.Payload{URL: normalized}); err != nil {
+		if _, err := download.EnqueueChannelFirst(ctx, store, download.Payload{URL: normalized, ScanOnly: scanOnly}); err != nil {
 			return enqueued, fmt.Errorf("enqueue channel %q: %w", normalized, err)
 		}
 		enqueued++
@@ -139,8 +141,10 @@ type Report struct {
 }
 
 // ImportFile parses the subscriptions.csv at path and enqueues a
-// channel-first download job for each valid channel, returning a report.
-func ImportFile(ctx context.Context, store *jobs.Store, path string) (Report, error) {
+// channel-first download job for each valid channel. When scanOnly is true the
+// channel and its catalog are added without downloading media. It returns a
+// report.
+func ImportFile(ctx context.Context, store *jobs.Store, path string, scanOnly bool) (Report, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Report{}, err
@@ -152,7 +156,7 @@ func ImportFile(ctx context.Context, store *jobs.Store, path string) (Report, er
 		return Report{}, err
 	}
 	report := Report{Parsed: len(entries)}
-	enqueued, err := EnqueueChannels(ctx, store, entries)
+	enqueued, err := EnqueueChannels(ctx, store, entries, scanOnly)
 	if err != nil {
 		report.Skipped = len(entries) - enqueued
 		report.Errors = append(report.Errors, err.Error())

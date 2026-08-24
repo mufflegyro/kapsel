@@ -112,7 +112,7 @@ func TestEnqueueChannelsEnqueuesChannelJobs(t *testing.T) {
 		{ChannelID: "UCAAAA", ChannelURL: "https://www.youtube.com/channel/UCAAAA"},
 		{ChannelID: "", ChannelURL: "https://www.youtube.com/@handleb"},
 	}
-	enqueued, err := EnqueueChannels(context.Background(), store, entries)
+	enqueued, err := EnqueueChannels(context.Background(), store, entries, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestEnqueueChannelsSkipsMalformedURLs(t *testing.T) {
 		{ChannelID: "UCAAAA", ChannelURL: "https://www.youtube.com/channel/UCAAAA"},
 		{ChannelID: "", ChannelURL: "not-a-valid-url"},
 	}
-	enqueued, err := EnqueueChannels(context.Background(), store, entries)
+	enqueued, err := EnqueueChannels(context.Background(), store, entries, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestImportFileProducesReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := ImportFile(context.Background(), store, csvPath)
+	report, err := ImportFile(context.Background(), store, csvPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,57 @@ func TestImportFileMissingFileErrors(t *testing.T) {
 
 	db := openDB(t)
 	store := jobs.NewStore(db)
-	if _, err := ImportFile(context.Background(), store, "/nonexistent/subscriptions.csv"); err == nil {
+	if _, err := ImportFile(context.Background(), store, "/nonexistent/subscriptions.csv", false); err == nil {
 		t.Fatal("expected an error for a missing file")
+	}
+}
+
+func TestEnqueueChannelsScanOnlyMarksJobPayload(t *testing.T) {
+	t.Parallel()
+
+	db := openDB(t)
+	store := jobs.NewStore(db)
+	entries := []Entry{
+		{ChannelID: "UCAAAA", ChannelURL: "https://www.youtube.com/channel/UCAAAA"},
+	}
+	enqueued, err := EnqueueChannels(context.Background(), store, entries, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enqueued != 1 {
+		t.Fatalf("expected 1 enqueued channel, got %d", enqueued)
+	}
+
+	var payload string
+	if err := db.QueryRow("SELECT payload_json FROM jobs WHERE type = ?", "channel_first_download").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, `"scan_only":true`) {
+		t.Fatalf("expected scan_only to be set on the job payload, got %q", payload)
+	}
+}
+
+func TestEnqueueChannelsDownloadModeHasNoScanOnly(t *testing.T) {
+	t.Parallel()
+
+	db := openDB(t)
+	store := jobs.NewStore(db)
+	entries := []Entry{
+		{ChannelID: "UCAAAA", ChannelURL: "https://www.youtube.com/channel/UCAAAA"},
+	}
+	enqueued, err := EnqueueChannels(context.Background(), store, entries, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enqueued != 1 {
+		t.Fatalf("expected 1 enqueued channel, got %d", enqueued)
+	}
+
+	var payload string
+	if err := db.QueryRow("SELECT payload_json FROM jobs WHERE type = ?", "channel_first_download").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(payload, `"scan_only"`) {
+		t.Fatalf("expected no scan_only in download-mode payload, got %q", payload)
 	}
 }

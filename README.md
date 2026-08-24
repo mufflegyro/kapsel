@@ -150,6 +150,12 @@ Kapsel can add a list of channels from a Google Takeout `subscriptions.csv` expo
 
 The importer reads the `Channel Url` (and/or `Channel Id`) columns, normalizes each channel URL, and enqueues a channel-first download job per channel, marking each channel subscribed for automatic downloads.
 
+To add channels to the catalog only, without downloading any video media:
+
+```sh
+./dist/kapsel import-subscriptions --scan-only /path/to/subscriptions.csv
+```
+
 ## Backups
 
 Create and restore metadata backups with:
