@@ -217,7 +217,7 @@ HTTP range requests and the media handler).
 
 A deterministic infrastructure smoke test (fresh volumes, health, migration,
 tool availability, media persistence) is automated in
-[`scripts/docker-smoke.sh`](../scripts/docker-smoke.sh); it does not require
+[`scripts/docker-smoke.sh`](scripts/docker-smoke.sh); it does not require
 YouTube access.
 
 ## Bring in an existing archive (channels, catalog, media)

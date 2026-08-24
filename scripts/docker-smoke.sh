@@ -19,7 +19,7 @@ set -euo pipefail
 # the throwaway instance.
 #
 # The YouTube download + playback check needs live network access and is
-# documented as a manual path in docs/docker.md ("Verify downloads and
+# documented as a manual path in DOCKER.md ("Verify downloads and
 # playback").
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

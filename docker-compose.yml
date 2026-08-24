@@ -14,7 +14,7 @@
 # The container binds 0.0.0.0:8080 and the ports: mapping below publishes it
 # on ALL host interfaces. AUTH IS REQUIRED when the port is reachable beyond
 # localhost. To publish loopback-only, change the ports mapping to
-# "127.0.0.1:8080:8080". See docs/docker.md for HTTPS termination (Caddy
+# "127.0.0.1:8080:8080". See DOCKER.md for HTTPS termination (Caddy
 # reverse proxy or self-signed) and the download+playback verification path.
 
 services:

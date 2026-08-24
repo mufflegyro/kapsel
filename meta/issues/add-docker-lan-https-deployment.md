@@ -35,6 +35,6 @@ Add a Docker deployment that binds Kapsel on `0.0.0.0` so it can sit behind a lo
 - [x] `deploy/docker/kapsel.env.example`: container paths (`/data`, `/media`, `/imports`), `KAPSEL_ADDR=:8080` (0.0.0.0), wrapper yt-dlp path.
 - [x] `docker-compose.yml`: build context repo root, env_file, `0.0.0.0:8080:8080` publish, named volumes for data/media/imports, healthcheck, restart policy.
 - [x] `.dockerignore` at repo root (data, test-data, dist, node_modules, playlists, subscriptions.csv, backups).
-- [x] `docs/docker.md`: quick start, auth-required warning for non-loopback binding, HTTPS termination (Caddy reverse proxy + self-signed), upgrade/backup, download+playback verification path.
+- [x] `DOCKER.md`: quick start, auth-required warning for non-loopback binding, HTTPS termination (Caddy reverse proxy + self-signed), upgrade/backup, download+playback verification path.
 - [x] `scripts/docker-smoke.sh`: fresh-volume startup, health, migration, tool availability, media persistence across recreation.
 - [x] Build image + run smoke locally, then commit.

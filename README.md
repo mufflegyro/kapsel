@@ -53,7 +53,7 @@ mise run release-build
 
 The binary is written to `dist/kapsel`.
 
-For a systemd-style local deployment, see [`docs/deployment.md`](docs/deployment.md). For a container deployment that binds `0.0.0.0` for LAN/reverse-proxy use, with downloads and the SQLite database on mounted volumes, see [`docs/docker.md`](docs/docker.md) and [`docker-compose.yml`](docker-compose.yml).
+For a systemd-style local deployment, see [`docs/deployment.md`](docs/deployment.md). For a container deployment that binds `0.0.0.0` for LAN/reverse-proxy use, with downloads and the SQLite database on mounted volumes, see [`DOCKER.md`](DOCKER.md) and [`docker-compose.yml`](docker-compose.yml).
 
 ## Configuration
 
