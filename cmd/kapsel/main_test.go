@@ -358,8 +358,8 @@ func TestReleaseBinaryServesHealthAndFrontend(t *testing.T) {
 		t.Fatalf("expected health response %q, got %q", "OK\n", string(health))
 	}
 	frontend := waitForHTTPBody(t, "http://"+addr+"/", done, &serverOutput)
-	if !strings.Contains(string(frontend), "Kapsel") {
-		t.Fatalf("expected embedded frontend shell to contain Kapsel, got %q", string(frontend))
+	if !strings.Contains(string(frontend), "Yummle") {
+		t.Fatalf("expected embedded frontend shell to contain Yummle, got %q", string(frontend))
 	}
 }
 

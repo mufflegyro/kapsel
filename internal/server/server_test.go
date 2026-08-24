@@ -508,8 +508,8 @@ func TestFrontendShell(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(body), "Kapsel") {
-		t.Fatalf("expected frontend shell to contain %q", "Kapsel")
+	if !strings.Contains(string(body), "Yummle") {
+		t.Fatalf("expected frontend shell to contain %q", "Yummle")
 	}
 }
 
