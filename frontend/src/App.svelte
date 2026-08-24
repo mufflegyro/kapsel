@@ -53,7 +53,7 @@
     '/settings': {
       title: 'Settings',
       eyebrow: 'Single node archive',
-      body: 'Readiness checks and local archive controls for this Kapsel node.',
+      body: 'Readiness checks and local archive controls for this Yummle node.',
     },
     '/subscriptions': {
       title: 'Subscriptions',
@@ -2916,13 +2916,13 @@
 </script>
 
 <svelte:head>
-  <title>Kapsel | {pageTitle}</title>
+  <title>Yummle | {pageTitle}</title>
 </svelte:head>
 
 <main class="app-shell" class:watch-mode={videoID}>
   <header class="topbar">
     <div class="brand-cluster">
-      <a class="brand" href="/" onclick={event => navigate(event, '/')}> <span class="brand-mark" aria-hidden="true"></span><span>Kapsel</span></a>
+      <a class="brand" href="/" onclick={event => navigate(event, '/')}> <span class="brand-mark" aria-hidden="true"></span><span>Yummle</span></a>
     </div>
 
     <form class="search-form" role="search" onsubmit={submitSearch}>
@@ -2990,11 +2990,11 @@
     {:else if session.auth_enabled && !session.authenticated}
       <section class="login-page" aria-label="Login">
         <p>Local archive</p>
-        <h1>Sign in to Kapsel</h1>
+        <h1>Sign in to Yummle</h1>
         {#if !session.configured}
           <div class="state state-error"><strong>No local account is configured.</strong><span>Set KAPSEL_AUTH_USERNAME, KAPSEL_AUTH_PASSWORD_HASH, and KAPSEL_SESSION_SECRET, or explicitly use KAPSEL_AUTH_MODE=disabled for development.</span></div>
         {:else}
-          <span>Use the local account configured for this Kapsel node.</span>
+          <span>Use the local account configured for this Yummle node.</span>
           <form class="login-card" onsubmit={submitLogin}>
             <label for="login-username">Username</label>
             <input id="login-username" bind:value={loginUsername} autocomplete="username" required />
@@ -3011,7 +3011,7 @@
           <form class="channel-dock" data-testid="channel-form" onsubmit={event => { event.preventDefault(); addChannel(); }}>
             <div>
               <strong>Add a channel</strong>
-              <span>Paste a YouTube channel URL. Kapsel syncs the latest catalog and imports the first video.</span>
+              <span>Paste a YouTube channel URL. Yummle syncs the latest catalog and imports the first video.</span>
             </div>
             <label class="visually-hidden" for="channel-url">Channel URL</label>
             <input id="channel-url" bind:value={channelURL} type="url" placeholder="https://www.youtube.com/@channel" required data-testid="channel-url-input" />
@@ -3219,11 +3219,11 @@
       <section class="utility-page" aria-label={utilityRoutes[path]?.title ?? 'Not found'}>
         <p>{utilityRoutes[path]?.eyebrow ?? 'Unknown route'}</p>
         <h1>{utilityRoutes[path]?.title ?? 'Not found'}</h1>
-        <span>{utilityRoutes[path]?.body ?? 'This route is not available in Kapsel yet.'}</span>
+        <span>{utilityRoutes[path]?.body ?? 'This route is not available in Yummle yet.'}</span>
         {#if path === '/downloads'}
           <div class="download-form-grid">
             <form class="channel-dock large" data-testid="direct-download-form" onsubmit={event => { event.preventDefault(); addVideo(); }}>
-              <div><strong>Queue a video</strong><span>Paste a single video URL. Kapsel queues the download and refreshes the library when it finishes.</span></div>
+              <div><strong>Queue a video</strong><span>Paste a single video URL. Yummle queues the download and refreshes the library when it finishes.</span></div>
               <label class="visually-hidden" for="download-video-url">Video URL</label>
               <input id="download-video-url" bind:value={videoURL} type="url" placeholder="https://www.youtube.com/watch?v=..." required data-testid="direct-download-url" />
               <button type="submit" disabled={videoSubmitDisabled} data-testid="direct-download-submit">{videoJob.status === 'loading' ? 'Queueing' : 'Add video'}</button>

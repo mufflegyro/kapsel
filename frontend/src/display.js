@@ -11,7 +11,7 @@ export function channelInitial(name) {
 }
 
 export function thumbnailFallback(item) {
-  return item?.thumbnail_fallback || channelInitial(item?.title || item?.id || 'Kapsel');
+  return item?.thumbnail_fallback || channelInitial(item?.title || item?.id || 'Yummle');
 }
 
 export function thumbnailStyle(item) {

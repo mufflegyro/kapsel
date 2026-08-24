@@ -558,7 +558,7 @@ test('in-app video navigation starts at the top after scrolling', async ({ page 
   await expect(page.getByTestId('video-detail-route')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 
-  await page.getByRole('link', { name: 'Kapsel' }).click();
+  await page.getByRole('link', { name: 'Yummle' }).click();
   await expect(page.getByTestId('library-route')).toBeVisible();
   await page.evaluate(() => {
     const spacer = document.createElement('div');
@@ -573,7 +573,7 @@ test('in-app video navigation starts at the top after scrolling', async ({ page 
 
   await startedLibraryCard.scrollIntoViewIfNeeded();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(500);
-  await page.getByRole('link', { name: 'Kapsel' }).click();
+  await page.getByRole('link', { name: 'Yummle' }).click();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 });
 
@@ -1487,7 +1487,7 @@ test('watch progress refreshes home thumbnails on entry instead of mutating cach
     return body.position_seconds;
   }).toBe(65);
 
-  await page.getByRole('link', { name: 'Kapsel' }).click();
+  await page.getByRole('link', { name: 'Yummle' }).click();
   await expect.poll(() => homeRequests).toBe(2);
   await expectPlaybackProgress(homeCard, 34);
 
@@ -1555,7 +1555,7 @@ test('watch progress invalidation follows stale in-flight home refreshes', async
   });
   await progressStarted;
 
-  await page.getByRole('link', { name: 'Kapsel' }).click();
+  await page.getByRole('link', { name: 'Yummle' }).click();
   await expect.poll(() => homeRequests).toBe(2);
   releaseProgressSave();
   await progressResponse;

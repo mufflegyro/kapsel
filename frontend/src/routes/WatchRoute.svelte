@@ -128,7 +128,7 @@
 
       <div class="watch-details">
         <h1 class="watch-title">{video.item.title}</h1>
-        {#if catalogOnly && membersOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Members only - join the channel to watch</strong><span>This video is restricted to channel members, so Kapsel cannot download it.</span></p>{:else if catalogOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Metadata only - no media file downloaded yet</strong><span>Download the video to make it playable from this Kapsel node.</span></p>{/if}
+        {#if catalogOnly && membersOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Members only - join the channel to watch</strong><span>This video is restricted to channel members, so Yummle cannot download it.</span></p>{:else if catalogOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Metadata only - no media file downloaded yet</strong><span>Download the video to make it playable from this Yummle node.</span></p>{/if}
         <div class="watch-row">
           <a class="channel-lockup" href={channelHref(video.item.channel)} onclick={event => navigate(event, channelHref(video.item.channel))}>
             <span class:has-thumbnail={!!video.item.channel?.thumbnail_url} class="avatar large" aria-hidden="true">
