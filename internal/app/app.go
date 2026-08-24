@@ -59,7 +59,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	jobStore := jobs.NewStore(db)
 	authManager := auth.NewManager(auth.Config{Enabled: cfg.AuthMode != "disabled", Username: cfg.AuthUsername, PasswordHash: cfg.AuthPasswordHash, SessionSecret: cfg.SessionSecret, SessionTTL: cfg.SessionTTL, CookieSecure: cfg.SessionCookieSecure})
-	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore}, nil)
+	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore}, nil)
 	previewer := previews.NewJobHandler(db, previews.Config{MediaRoot: cfg.MediaRoot, FFmpegPath: cfg.FFMPEGPath, JobStore: jobStore})
 	taImporter := taimport.NewJobHandler(db, jobStore, cfg.ImportRoot).WithDiskSpace(cfg.DataDir, cfg.MinFreeSpaceBytes, nil)
 	runner := jobs.NewRunner(jobStore, map[string]jobs.Handler{

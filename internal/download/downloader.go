@@ -108,6 +108,7 @@ type Config struct {
 	MinFreeSpaceBytes  uint64
 	Stat               diskspace.StatFunc
 	PreviewsEnabled    bool
+	SubtitlesEnabled   bool
 	FFMPEGPath         string
 	PreviewRunner      previews.Runner
 	JobStore           *jobs.Store
@@ -1026,30 +1027,36 @@ func (d *Downloader) BuildCommand(rawURL string) (Command, error) {
 		return Command{}, err
 	}
 
+	args := d.ytdlpArgs(cookiesFile,
+		"--no-playlist",
+		"--no-simulate",
+		"--newline",
+		"--progress",
+		"--check-formats",
+		"--dump-single-json",
+		"--write-info-json",
+		"--write-thumbnail",
+		"--format", d.config.FormatSelector,
+		"--merge-output-format", "mp4",
+		"--paths", mediaRoot,
+		"--output", "%(id)s.%(ext)s",
+		downloadURL,
+	)
+	if d.config.SubtitlesEnabled {
+		args = append(args,
+			"--write-subs",
+			"--sub-langs", DefaultSubtitleLanguages,
+			"--convert-subs", "vtt",
+		)
+	}
+
 	return Command{
 		Name:    d.config.YTDLPPath,
 		Dir:     mediaRoot,
 		Kind:    sandbox.KindYTDLP,
 		Access:  d.ytdlpAccess(mediaRoot, cookiesFile, true),
 		Network: sandbox.NetworkAllow,
-		Args: d.ytdlpArgs(cookiesFile,
-			"--no-playlist",
-			"--no-simulate",
-			"--newline",
-			"--progress",
-			"--check-formats",
-			"--dump-single-json",
-			"--write-info-json",
-			"--write-thumbnail",
-			"--write-subs",
-			"--sub-langs", DefaultSubtitleLanguages,
-			"--convert-subs", "vtt",
-			"--format", d.config.FormatSelector,
-			"--merge-output-format", "mp4",
-			"--paths", mediaRoot,
-			"--output", "%(id)s.%(ext)s",
-			downloadURL,
-		),
+		Args:    args,
 	}, nil
 }
 
@@ -1354,7 +1361,7 @@ func (d *Downloader) handlePayload(ctx context.Context, jobID string, payloadJSO
 		}
 		slog.Warn("yt-dlp exited after producing downloaded media metadata; continuing ingest", "video_id", downloadedMetadata.ID, "job_id", jobID, "error", SanitizeDiagnosticText(ytdlpCommandError(command, output, runErr).Error()))
 	}
-	if hasOriginalAutomaticSubtitles(downloadedMetadata) {
+	if d.config.SubtitlesEnabled && hasOriginalAutomaticSubtitles(downloadedMetadata) {
 		command, err := d.BuildOriginalAutomaticSubtitleCommand(downloadURL)
 		if err != nil {
 			return ingestResult{}, err

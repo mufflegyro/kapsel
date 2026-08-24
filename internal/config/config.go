@@ -36,6 +36,7 @@ const (
 	EnvYTDLPPath           = "KAPSEL_YTDLP_PATH"
 	EnvYTDLPSleepInterval  = "KAPSEL_YTDLP_SLEEP_INTERVAL"
 	EnvYTDLPUpdateInterval = "KAPSEL_YTDLP_UPDATE_INTERVAL"
+	EnvSubtitlesEnabled    = "KAPSEL_SUBTITLES_ENABLED"
 )
 
 const defaultYTDLPFormat = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
@@ -67,6 +68,7 @@ type Config struct {
 	YTDLPPath                    string
 	YTDLPSleepInterval           time.Duration
 	YTDLPUpdateInterval          time.Duration
+	SubtitlesEnabled             bool
 }
 
 func Load() Config {
@@ -103,6 +105,7 @@ func loadFromLookup(lookup func(string) (string, bool), lookPath func(string) (s
 		SessionSecretConfigured:      sessionSecretConfigured,
 		SessionTTL:                   durationOrDefault(lookup, EnvSessionTTL, 7*24*time.Hour),
 		FFMPEGPath:                   ffmpegPath,
+		SubtitlesEnabled:             boolOrDefault(lookup, EnvSubtitlesEnabled, true),
 		YTDLPCookiesFile:             strings.TrimSpace(valueOrDefault(lookup, EnvYTDLPCookiesFile, "")),
 		YTDLPFormat:                  valueOrDefault(lookup, EnvYTDLPFormat, defaultYTDLPFormat),
 		YTDLPPath:                    valueOrDefault(lookup, EnvYTDLPPath, "yt-dlp"),

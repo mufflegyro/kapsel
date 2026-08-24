@@ -25,7 +25,7 @@ import (
 func TestBuildCommand(t *testing.T) {
 	t.Parallel()
 
-	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media"}, nil)
+	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", SubtitlesEnabled: true}, nil)
 	command, err := downloader.BuildCommand("https://www.youtube.com/watch?v=abc123DEF45")
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestBuildOriginalAutomaticSubtitleCommand(t *testing.T) {
 func TestBuildCommandsUseConfiguredCookiesFile(t *testing.T) {
 	t.Parallel()
 
-	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", YTDLPCookiesFile: "/etc/kapsel/youtube.cookies.txt"}, nil)
+	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", YTDLPCookiesFile: "/etc/kapsel/youtube.cookies.txt", SubtitlesEnabled: true}, nil)
 	commands := []Command{}
 	video, err := downloader.BuildCommand("https://www.youtube.com/watch?v=abc123DEF45")
 	if err != nil {
@@ -115,7 +115,7 @@ func TestBuildCommandsResolveRelativeSandboxPaths(t *testing.T) {
 	cookiesFile := filepath.Join("secrets", "youtube.cookies.txt")
 	wantMediaRoot := filepath.Join(root, mediaRoot)
 	wantCookiesFile := filepath.Join(root, cookiesFile)
-	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot, YTDLPCookiesFile: cookiesFile}, nil)
+	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot, YTDLPCookiesFile: cookiesFile, SubtitlesEnabled: true}, nil)
 
 	video, err := downloader.BuildCommand("https://www.youtube.com/watch?v=abc123DEF45")
 	if err != nil {
@@ -1074,7 +1074,7 @@ func TestDownloadHandlerFetchesOriginalAutomaticSubtitles(t *testing.T) {
 		fixtureMetadataWithAutomaticOriginalSubtitle(t),
 	}}
 	runner := jobs.NewRunner(store, map[string]jobs.Handler{
-		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot}, runnerCalls).Handle,
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot, SubtitlesEnabled: true}, runnerCalls).Handle,
 	})
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1115,7 +1115,7 @@ func TestDownloadHandlerKeepsMediaWhenOriginalAutomaticSubtitlesFail(t *testing.
 		errs: []error{nil, errors.New("exit status 1")},
 	}
 	runner := jobs.NewRunner(store, map[string]jobs.Handler{
-		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot}, runnerCalls).Handle,
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot, SubtitlesEnabled: true}, runnerCalls).Handle,
 	})
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1148,7 +1148,7 @@ func TestDownloadHandlerPropagatesOriginalAutomaticSubtitleCancellation(t *testi
 		errs:   []error{nil, context.Canceled},
 	}
 	runner := jobs.NewRunner(store, map[string]jobs.Handler{
-		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot}, runnerCalls).Handle,
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: mediaRoot, SubtitlesEnabled: true}, runnerCalls).Handle,
 	})
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
