@@ -57,7 +57,7 @@ const DefaultRetentionStaleAfter = 14 * 24 * time.Hour
 
 const DefaultRetentionWatchedAfter = 24 * time.Hour
 
-const DefaultFormatSelector = "bv[height<=720][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=720][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=720][ext=mp4]/best[height<=720]"
+const DefaultFormatSelector = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
 
 const DefaultYTDLPSleepInterval = 10 * time.Second
 

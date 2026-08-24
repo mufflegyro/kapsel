@@ -37,7 +37,7 @@ const (
 	EnvYTDLPSleepInterval  = "KAPSEL_YTDLP_SLEEP_INTERVAL"
 )
 
-const defaultYTDLPFormat = "bv[height<=720][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=720][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=720][ext=mp4]/best[height<=720]"
+const defaultYTDLPFormat = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
 
 const DefaultMediaURLTTL = 24 * time.Hour
 

@@ -16,6 +16,7 @@ frontend/test-results/
 
 # Local data
 data/
+test-data/
 *.db
 *.db-*
 *.sqlite

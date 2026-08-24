@@ -3,3 +3,4 @@
 - [ ] [Add CSRF protection for state-changing APIs](issues/add-csrf-protection-for-state-changing-apis.md)
 - [ ] [Split download worker responsibilities](issues/split-download-worker-responsibilities.md)
 - [ ] [Clarify scheduler job ownership](issues/clarify-scheduler-job-ownership.md)
+- [ ] [Fix YouTube download 403 and raise default to 1080p](issues/fix-youtube-download-403-and-raise-default-to-1080p.md)
