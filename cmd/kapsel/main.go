@@ -22,6 +22,7 @@ import (
 	"kapsel/internal/config"
 	"kapsel/internal/database"
 	"kapsel/internal/diskspace"
+	"kapsel/internal/playlistimport"
 	"kapsel/internal/storage"
 	"kapsel/internal/subsimport"
 	"kapsel/internal/taimport"
@@ -47,6 +48,8 @@ func runWithConfig(ctx context.Context, cfg config.Config, args []string, stdin 
 			return runImportTA(ctx, cfg, args[1:], stdout, stderr)
 		case "import-subscriptions":
 			return runImportSubscriptions(ctx, cfg, args[1:], stdout, stderr)
+		case "import-playlists":
+			return runImportPlaylists(ctx, cfg, args[1:], stdout, stderr)
 		case "backup":
 			return runBackup(ctx, cfg, args[1:], stdout, stderr)
 		case "restore":
@@ -279,6 +282,50 @@ func runImportSubscriptions(ctx context.Context, cfg config.Config, args []strin
 		return 1
 	}
 	if err := json.NewEncoder(stdout).Encode(report); err != nil {
+		fmt.Fprintf(stderr, "failed to write import report: %v\n", err)
+		return 1
+	}
+
+	return 0
+}
+
+func runImportPlaylists(ctx context.Context, cfg config.Config, args []string, stdout io.Writer, stderr io.Writer) int {
+	downloadMissing := false
+	filtered := []string{}
+	for _, arg := range args {
+		switch arg {
+		case "--download":
+			downloadMissing = true
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	if len(filtered) < 1 {
+		fmt.Fprintln(stderr, "usage: kapsel import-playlists [--download] <playlist.csv>...")
+		return 2
+	}
+	application, err := app.New(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "application setup failed: %v\n", err)
+		return 1
+	}
+	defer application.Close()
+
+	total := playlistimport.Report{Playlists: 0}
+	for _, path := range filtered {
+		report, err := playlistimport.ImportFile(ctx, application.DB, application.Jobs, path, downloadMissing)
+		if err != nil {
+			fmt.Fprintf(stderr, "playlist import %q failed: %v\n", path, err)
+			return 1
+		}
+		total.Playlists += report.Playlists
+		total.Linked += report.Linked
+		total.Missing += report.Missing
+		total.Enqueued += report.Enqueued
+		total.Skipped += report.Skipped
+		total.Errors = append(total.Errors, report.Errors...)
+	}
+	if err := json.NewEncoder(stdout).Encode(total); err != nil {
 		fmt.Fprintf(stderr, "failed to write import report: %v\n", err)
 		return 1
 	}
