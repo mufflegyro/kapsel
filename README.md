@@ -13,6 +13,9 @@ Yummle is a fork of Kapsel with a few extra features. Kapsel is a small self-hos
 - Import core TubeArchivist backup data.
 - Back up and restore SQLite metadata separately from large media files.
 - Inspect storage use and clean orphaned files conservatively.
+- Update yt-dlp to nightly automatically.
+- Remove channels.
+- Deploy as docker container with various .env tweaks.
 
 ## Requirements
 
