@@ -1,6 +1,6 @@
-# Kapsel
+# Yummle
 
-Kapsel is a small self-hosted video archive for one person or household. It downloads online videos with `yt-dlp`, stores metadata in SQLite, keeps media on the filesystem, and serves a local web UI for browsing, searching, and watching your archive.
+Yummle is a fork of Kapsel with a few extra features. Kapsel is a small self-hosted video archive for one person or household. It downloads online videos with `yt-dlp`, stores metadata in SQLite, keeps media on the filesystem, and serves a local web UI for browsing, searching, and watching your archive.
 
 ![Kapsel watch page showing an archived video](docs/kapsel-watch-screenshot.jpg)
 
