@@ -36,6 +36,11 @@ This is a shell-quoting failure on my part, not a tool bug.
    and re-points the rebuilt video rows at the existing files
    (`media_path`, `thumbnail_path`, `media_origin='manual'`,
    `media_downloaded_at`, `archived_at`) without re-downloading.
+   **Done:** 8 videos with complete media re-linked and serving (HTTP 200 +
+   range 206 verified); rows for 9 manual-download channels were recreated
+   from info.json since those channels are not in subscriptions.csv. 3
+   videos were already incomplete before the incident (no complete media on
+   disk) and keep their intact metadata for later re-download.
 
 **Permanent guardrails (committed):**
 - `AGENTS.md` now requires a verified `kapsel backup <path>.zip` before any
