@@ -305,6 +305,61 @@ docker compose run --rm -v "$PWD/subscriptions.csv:/imports/subscriptions.csv:ro
 This enqueues `channel_first_download` jobs that rebuild each channel's
 catalog from YouTube, like the post-incident rebuild did.
 
+### Import playlists in the container
+
+`kapsel import-playlists` needs the exclusive DB lock, so the server must be
+**stopped** while the one-shot import container runs (the metadata-scan jobs
+it enqueues are processed by the server's job runner once it starts again).
+The default mode enqueues metadata-only scans — no media is downloaded.
+
+1. Back up first (safe while the server runs, `VACUUM INTO`):
+
+   ```sh
+   docker compose exec kapsel /opt/kapsel/kapsel backup /media/backups/pre-playlists-$(date +%Y%m%d-%H%M%S).zip
+   ```
+
+2. Stop the server to release the lock:
+
+   ```sh
+   docker compose stop
+   ```
+
+3. Import one or more CSV exports, binding them read-only into `/imports`:
+
+   ```sh
+   docker compose run --rm \
+     -v "$PWD/playlists/DnB-videos.csv:/imports/DnB-videos.csv:ro" \
+     kapsel import-playlists /imports/DnB-videos.csv
+   ```
+
+   The report lists `linked` (already in the archive) and `enqueued`
+   (metadata-only `video_metadata_scan` jobs for the missing episodes). To
+   import several exports in one run, pass each path:
+   `kapsel import-playlists /imports/A.csv /imports/B.csv`.
+
+4. Start the server again; its job runner processes the metadata scans:
+
+   ```sh
+   docker compose start
+   # watch until the scans finish:
+   docker compose exec kapsel /opt/kapsel/kapsel storage-report
+   ```
+
+5. Re-run the import to link the now-cataloged episodes into the playlist
+   (stop, run, start again — same as steps 2–3). The second run reports
+   `linked: N` for every episode whose metadata scan succeeded.
+
+   ```sh
+   docker compose stop
+   docker compose run --rm \
+     -v "$PWD/playlists/DnB-videos.csv:/imports/DnB-videos.csv:ro" \
+     kapsel import-playlists /imports/DnB-videos.csv
+   docker compose start
+   ```
+
+Add `--link-only` to skip enqueueing anything, or `--download` to enqueue
+full media downloads instead of metadata scans.
+
 ## Troubleshooting
 
 - **Downloads fail with `HTTP Error 403: Forbidden`** — the bundled nightly
