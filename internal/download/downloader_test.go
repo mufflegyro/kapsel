@@ -4735,3 +4735,81 @@ func TestChannelFirstScanOnlyDoesNotEnqueueDownload(t *testing.T) {
 	assertScalar(t, db, "SELECT subscribed FROM channels WHERE id = ?", int64(1), "chan-1")
 	assertScalar(t, db, "SELECT count(*) FROM videos", int64(4))
 }
+
+func TestDownloadHandlerMarksMembersOnlyVideoAndDoesNotRetry(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name) VALUES ('chan-1', 'chan-1', 'Channel')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, source, channel_id, title, duration_seconds, published_at, archived_at)
+VALUES ('mem-vid', 'hD37el3bCw4', 'youtube', 'chan-1', 'Members Only Video', 120, '2026-01-01', strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        JobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/watch?v=hD37el3bCw4"}`,
+		MaxAttempts: 3,
+		RunAfter:    time.Now().Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{
+			stdout: []byte("ERROR: [youtube] hD37el3bCw4: This video is available to this channel's members on level: Friends of the Pod (or any higher level). Join this channel to get access to members-only content and other exclusive perks."),
+			err:    errors.New("exit status 1"),
+		}).Handle,
+	})
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusSucceeded {
+		t.Fatalf("expected members-only failure to complete without retry, got %#v", stored)
+	}
+	assertScalar(t, db, "SELECT members_only FROM videos WHERE id = ?", int64(1), "mem-vid")
+}
+
+func TestDownloadHandlerRetriesNonMembersOnlyFailure(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        JobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/watch?v=abc123DEF45"}`,
+		MaxAttempts: 3,
+		RunAfter:    time.Now().Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{
+			stdout: []byte("ERROR: [youtube] abc123DEF45: Some other failure"),
+			err:    errors.New("exit status 1"),
+		}).Handle,
+	})
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusQueued || stored.Attempts != 1 {
+		t.Fatalf("expected non-members-only failure to queue for retry, got %#v", stored)
+	}
+}

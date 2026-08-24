@@ -1243,6 +1243,12 @@ button.thumbnail-link:disabled {
   z-index: 2;
 }
 
+.thumb.members-only::after,
+.mini-thumb.members-only::after,
+.watch-fallback-thumb.members-only::after {
+  content: "Members only";
+}
+
 .catalog-title {
   color: var(--muted);
 }

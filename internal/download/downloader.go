@@ -1329,6 +1329,15 @@ func (d *Downloader) handlePayload(ctx context.Context, jobID string, payloadJSO
 		}
 	}
 	output, runErr := d.runYTDLP(ctx, command)
+	if runErr != nil && isMembersOnlyYTDLPFailure(output, runErr) {
+		videoID := videoIDFromWatchURL(downloadURL)
+		if videoID != "" {
+			if err := d.markVideoMembersOnly(ctx, videoID); err != nil {
+				return ingestResult{}, ytdlpJobError(command, output, runErr)
+			}
+		}
+		return ingestResult{Action: "members_only_skipped"}, nil
+	}
 	downloadedMetadata, err := parseDownloadMetadataOutput(output, runErr != nil)
 	if err != nil {
 		if runErr != nil {
@@ -1393,6 +1402,39 @@ func isRecoverableYTDLPDownloadExit(err error, value metadata) bool {
 	}
 
 	return strings.TrimSpace(value.ID) != "" && strings.TrimSpace(value.Title) != "" && strings.TrimSpace(value.mediaPath()) != ""
+}
+
+// membersOnlyFailurePatterns match yt-dlp's message when a video is restricted
+// to a channel's paying members. Such a video can never be downloaded without
+// membership, so Kapsel should mark it and skip further retries.
+var membersOnlyFailurePatterns = []string{
+	"available to this channel's members",
+	"members-only content",
+	"join this channel to get access",
+	"member-only",
+}
+
+func isMembersOnlyYTDLPFailure(output []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(string(output) + "\n" + err.Error())
+	for _, pattern := range membersOnlyFailurePatterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (d *Downloader) markVideoMembersOnly(ctx context.Context, videoID string) error {
+	if d.db == nil || strings.TrimSpace(videoID) == "" {
+		return nil
+	}
+	_, err := d.db.ExecContext(ctx, "UPDATE videos SET members_only = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE external_id = ? AND source = 'youtube'", videoID)
+
+	return err
 }
 
 func (d *Downloader) HandleChannelFirst(ctx context.Context, job jobs.Job) error {

@@ -132,6 +132,7 @@
   let scanJob = { status: 'idle', job: null, error: '' };
   let channelSubscriptionAction = { status: 'idle', error: '' };
   let channelDeleteAction = { status: 'idle', error: '' };
+  let channelDeleteResetTimer = null;
   let keepForeverAction = { status: 'idle', error: '' };
   let markPlayedAction = { status: 'idle', error: '' };
   let deleteVideoMediaAction = { status: 'idle', error: '' };
@@ -543,6 +544,7 @@
       channelSubscriptionRequestToken++;
       channelSubscriptionAction = { status: 'idle', error: '' };
       channelSubscriptionOverride = { id: '', subscribed: null };
+      channelDeleteAction = { status: 'idle', error: '' };
     }
     channelPage = { ...channelPage, status: 'loading', error: '' };
     try {
@@ -1225,6 +1227,10 @@
       await requestNoContent(`/api/channels/${encodeURIComponent(id)}`, 'DELETE');
       if (requestToken !== channelDeleteRequestToken) return;
       channelDeleteAction = { status: 'succeeded', error: '' };
+      if (channelDeleteResetTimer) clearTimeout(channelDeleteResetTimer);
+      channelDeleteResetTimer = setTimeout(() => {
+        if (channelDeleteAction.status === 'succeeded') channelDeleteAction = { status: 'idle', error: '' };
+      }, 4000);
       if (channelPage.item?.id === id) {
         channelPage = { status: 'idle', item: null, videos: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
         navigate({ preventDefault() {}, button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, '/channels');
@@ -1726,6 +1732,7 @@
   }
 
   function canDownloadCatalogVideo(item) {
+    if (item?.members_only) return false;
     return isCatalogOnly(item) && item?.can_download === true;
   }
 

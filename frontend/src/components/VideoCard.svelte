@@ -5,6 +5,7 @@
     feedMetadataLine,
     formatDuration,
     isCatalogOnly,
+    isMembersOnly,
     thumbnailFallback,
     thumbnailStyle,
     videoHref,
@@ -24,7 +25,8 @@
   } = $props();
 
   let catalogOnly = $derived(isCatalogOnly(item));
-  let showDownloadAction = $derived(enableCatalogDownload && catalogOnly && item?.can_download === true);
+  let membersOnly = $derived(isMembersOnly(item));
+  let showDownloadAction = $derived(enableCatalogDownload && catalogOnly && !membersOnly && item?.can_download === true);
   let downloadStatus = $derived(downloadJob?.status || 'idle');
   let downloadActive = $derived(downloadStatus === 'loading' || downloadStatus === 'queued' || downloadStatus === 'running');
   let downloadComplete = $derived(downloadStatus === 'succeeded');
@@ -57,7 +59,7 @@
 </script>
 
 {#snippet thumbnail()}
-  <div class:catalog-only={catalogOnly} class:has-thumbnail={!!item?.thumbnail_url} class:downloading={downloadActive} class="thumb" style={thumbnailStyle(item)} aria-hidden="true">
+  <div class:catalog-only={catalogOnly} class:members-only={membersOnly} class:has-thumbnail={!!item?.thumbnail_url} class:downloading={downloadActive} class="thumb" style={thumbnailStyle(item)} aria-hidden="true">
     {#if item?.thumbnail_url}<img src={item.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}<span>{thumbnailFallback(item)}</span>{/if}
     {#if duration}<span class="duration-badge">{duration}</span>{/if}
     {#if showPlaybackProgress}<div class="thumbnail-playback-progress" data-testid="playback-progress-bar" aria-hidden="true"><span style={`width: ${playbackProgress}%`}></span></div>{/if}

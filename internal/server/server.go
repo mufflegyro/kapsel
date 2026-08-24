@@ -1042,6 +1042,7 @@ type videoResponse struct {
 	ThumbnailFallback string                 `json:"thumbnail_fallback"`
 	ArchiveState      string                 `json:"archive_state"`
 	CanDownload       bool                   `json:"can_download"`
+	MembersOnly       bool                   `json:"members_only"`
 	KeepForever       bool                   `json:"keep_forever"`
 	TimelinePreview   *timelinePreview       `json:"timeline_preview,omitempty"`
 	ChaptersVTTURL    string                 `json:"chapters_vtt_url,omitempty"`
@@ -1140,6 +1141,7 @@ type videoListItem struct {
 	ThumbnailFallback string       `json:"thumbnail_fallback"`
 	ArchiveState      string       `json:"archive_state"`
 	CanDownload       bool         `json:"can_download"`
+	MembersOnly       bool         `json:"members_only"`
 	KeepForever       bool         `json:"keep_forever"`
 	Channel           channelInfo  `json:"channel"`
 	Progress          progressInfo `json:"progress"`
@@ -1158,6 +1160,7 @@ const videoListProjection = `v.id,
   v.source,
   v.external_id,
   v.keep_forever,
+  v.members_only,
   COALESCE(c.id, ''),
   COALESCE(c.name, ''),
   COALESCE(c.thumbnail_url, ''),
@@ -1478,6 +1481,7 @@ func scanVideoListItems(rows *sql.Rows, mediaURLs mediaURLBuilder) ([]videoListI
 		var channelThumbnailPath string
 		var watched int
 		var keepForever int
+		var membersOnly int
 		if err := rows.Scan(
 			&item.ID,
 			&item.Title,
@@ -1492,6 +1496,7 @@ func scanVideoListItems(rows *sql.Rows, mediaURLs mediaURLBuilder) ([]videoListI
 			&source,
 			&externalID,
 			&keepForever,
+			&membersOnly,
 			&item.Channel.ID,
 			&item.Channel.Name,
 			&remoteChannelThumbnailURL,
@@ -1513,7 +1518,8 @@ func scanVideoListItems(rows *sql.Rows, mediaURLs mediaURLBuilder) ([]videoListI
 		}
 		item.ThumbnailFallback = thumbnailFallback(item.ID, item.Title)
 		item.ArchiveState = videoArchiveState(mediaAvailable)
-		item.CanDownload = canDownloadCatalogVideo(source, externalID, mediaAvailable)
+		item.MembersOnly = membersOnly == 1
+		item.CanDownload = canDownloadCatalogVideo(source, externalID, mediaAvailable, item.MembersOnly)
 		item.KeepForever = keepForever == 1
 		item.Progress.Watched = watched == 1
 		items = append(items, item)
@@ -2472,6 +2478,7 @@ func getVideo(db *sql.DB, mediaURLs mediaURLBuilder, store *jobs.Store, sponsorC
 		var previewCount int
 		var watched int
 		var keepForever int
+		var membersOnly int
 		if err := db.QueryRowContext(r.Context(), `
 SELECT
   v.id,
@@ -2487,6 +2494,7 @@ SELECT
 			  v.source,
 			  v.external_id,
 			  v.keep_forever,
+			  v.members_only,
 			  COALESCE(vp.sprite_path, ''),
 	  COALESCE(vp.interval_seconds, 0),
 	  COALESCE(vp.frame_width, 0),
@@ -2518,6 +2526,7 @@ WHERE v.id = ?`, r.PathValue("id")).Scan(
 			&source,
 			&externalID,
 			&keepForever,
+			&membersOnly,
 			&previewSpritePath,
 			&previewInterval,
 			&previewFrameWidth,
@@ -2554,7 +2563,8 @@ WHERE v.id = ?`, r.PathValue("id")).Scan(
 		}
 		response.ThumbnailFallback = thumbnailFallback(response.ID, response.Title)
 		response.ArchiveState = videoArchiveState(mediaAvailable)
-		response.CanDownload = canDownloadCatalogVideo(source, externalID, mediaAvailable)
+		response.MembersOnly = membersOnly == 1
+		response.CanDownload = canDownloadCatalogVideo(source, externalID, mediaAvailable, response.MembersOnly)
 		response.KeepForever = keepForever == 1
 		activeDownloadJob, err := activeDownloadJobForVideo(r.Context(), store, source, externalID)
 		if err != nil {
@@ -2775,8 +2785,8 @@ VALUES (?, ?, ?)`, videoID, segment.StartSeconds, segment.EndSeconds); err != ni
 	return tx.Commit()
 }
 
-func canDownloadCatalogVideo(source string, externalID string, mediaAvailable bool) bool {
-	if mediaAvailable || source != "youtube" || externalID == "" {
+func canDownloadCatalogVideo(source string, externalID string, mediaAvailable bool, membersOnly bool) bool {
+	if membersOnly || mediaAvailable || source != "youtube" || externalID == "" {
 		return false
 	}
 	_, err := download.NormalizeDirectVideoURL("https://www.youtube.com/watch?v=" + url.QueryEscape(externalID))

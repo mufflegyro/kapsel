@@ -23,6 +23,10 @@ export function isCatalogOnly(item) {
   return item?.archive_state === 'catalog-only';
 }
 
+export function isMembersOnly(item) {
+  return isCatalogOnly(item) && item?.members_only === true;
+}
+
 export function videoTileLabel(item) {
   return isCatalogOnly(item) ? `Open metadata for ${item.title}` : `Watch ${item.title}`;
 }
@@ -53,6 +57,7 @@ export function formatViewCount(count) {
 export function metadataLine(item) {
   const line = feedMetadataLine(item);
   if (line) return line;
+  if (isMembersOnly(item)) return 'Members only - join the channel to watch';
   return isCatalogOnly(item) ? 'Metadata archived - media not downloaded' : 'Media downloaded locally';
 }
 

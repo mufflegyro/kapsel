@@ -1,7 +1,7 @@
 <script>
   import PaginationControls from '../components/PaginationControls.svelte';
   import RichText from '../components/RichText.svelte';
-  import { channelHref, channelInitial, formatDate, formatDuration, isCatalogOnly, metadataLine, thumbnailFallback, thumbnailStyle, videoHref, videoTileLabel } from '../display.js';
+  import { channelHref, channelInitial, formatDate, formatDuration, isCatalogOnly, isMembersOnly, metadataLine, thumbnailFallback, thumbnailStyle, videoHref, videoTileLabel } from '../display.js';
 
   const noop = () => {};
 
@@ -56,6 +56,7 @@
   } = $props();
 
   let catalogOnly = $derived(isCatalogOnly(video.item));
+  let membersOnly = $derived(isMembersOnly(video.item));
   let hasDescription = $derived(String(video.item?.description || '').trim() !== '');
   let commentsEmpty = $derived(commentsPage.status !== 'loading' && commentsPage.status !== 'error' && commentsPage.comments.length === 0);
   let keepForeverLabel = $derived(catalogOnly ? (keepForeverAction.status === 'loading' ? 'Saving protection' : video.item?.keep_forever ? 'Protected from cleanup' : 'Protect from cleanup') : (keepForeverAction.status === 'loading' ? 'Saving keep state' : video.item?.keep_forever ? 'Kept forever' : 'Keep forever'));
@@ -99,7 +100,7 @@
             {/key}
           {/if}
         {:else}
-          <div class:catalog-only={catalogOnly} class:has-thumbnail={!!video.item.thumbnail_url} class:downloading={isChannelJobActive(catalogVideoJobs[video.item.id]?.status)} class="watch-fallback-thumb" style={thumbnailStyle(video.item)} aria-hidden="true">
+          <div class:catalog-only={catalogOnly} class:members-only={membersOnly} class:has-thumbnail={!!video.item.thumbnail_url} class:downloading={isChannelJobActive(catalogVideoJobs[video.item.id]?.status)} class="watch-fallback-thumb" style={thumbnailStyle(video.item)} aria-hidden="true">
             {#if video.item.thumbnail_url}<img src={video.item.thumbnail_url} alt="" referrerpolicy="no-referrer" />{:else}<span>{thumbnailFallback(video.item)}</span>{/if}
             {#if isChannelJobActive(catalogVideoJobs[video.item.id]?.status)}<div class="thumbnail-download-progress"><span style={`width: ${jobProgressPercent(catalogVideoJobs[video.item.id])}%`}></span></div><strong class="thumbnail-download-percent" data-testid="download-progress-percent">{jobProgressPercent(catalogVideoJobs[video.item.id])}%</strong>{/if}
           </div>
@@ -127,7 +128,7 @@
 
       <div class="watch-details">
         <h1 class="watch-title">{video.item.title}</h1>
-        {#if catalogOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Metadata only - no media file downloaded yet</strong><span>Download the video to make it playable from this Kapsel node.</span></p>{/if}
+        {#if catalogOnly && membersOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Members only - join the channel to watch</strong><span>This video is restricted to channel members, so Kapsel cannot download it.</span></p>{:else if catalogOnly}<p class="media-availability metadata-only" data-testid="media-availability"><strong>Metadata only - no media file downloaded yet</strong><span>Download the video to make it playable from this Kapsel node.</span></p>{/if}
         <div class="watch-row">
           <a class="channel-lockup" href={channelHref(video.item.channel)} onclick={event => navigate(event, channelHref(video.item.channel))}>
             <span class:has-thumbnail={!!video.item.channel?.thumbnail_url} class="avatar large" aria-hidden="true">

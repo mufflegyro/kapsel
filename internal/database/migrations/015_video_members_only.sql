@@ -1,0 +1,1 @@
+ALTER TABLE videos ADD COLUMN members_only INTEGER NOT NULL DEFAULT 0 CHECK (members_only IN (0, 1));
