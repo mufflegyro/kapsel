@@ -5162,3 +5162,81 @@ VALUES ('vid-m', 'vid-m', 'chan-media', 'Downloaded One', 120, '2026-01-01', str
 	assertServerScalar(t, db, "SELECT count(*) FROM channels WHERE id = 'chan-media'", int64(1))
 	assertServerScalar(t, db, "SELECT count(*) FROM videos WHERE id = 'vid-m'", int64(1))
 }
+
+func TestVideoListExcludesMembersOnlyVideos(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	root := t.TempDir()
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name) VALUES ('chan-mo', 'chan-mo', 'Channel')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title, duration_seconds, published_at, archived_at)
+VALUES
+  ('vis-1', 'vis-1', 'chan-mo', 'Visible Video', 60, '2026-01-01', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ('mem-1', 'mem-1', 'chan-mo', 'Members Only Video', 60, '2026-01-02', strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE videos SET members_only = 1 WHERE id = 'mem-1'"); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(WithDatabase(db), WithMedia(root, media.NewSigner("secret")), WithMediaURLTTL(time.Hour))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/videos?page_size=10", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "vis-1" {
+		t.Fatalf("expected only the non-members-only video in the list, got %#v", response.Data)
+	}
+}
+
+func TestChannelVideoListExcludesMembersOnlyVideos(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	root := t.TempDir()
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name) VALUES ('chan-mo', 'chan-mo', 'Channel')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title, duration_seconds, published_at, archived_at)
+VALUES
+  ('vis-1', 'vis-1', 'chan-mo', 'Visible Video', 60, '2026-01-01', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ('mem-1', 'mem-1', 'chan-mo', 'Members Only Video', 60, '2026-01-02', strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE videos SET members_only = 1 WHERE id = 'mem-1'"); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(WithDatabase(db), WithMedia(root, media.NewSigner("secret")), WithMediaURLTTL(time.Hour))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/channels/chan-mo/videos?page_size=10", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "vis-1" {
+		t.Fatalf("expected only the non-members-only video in the channel list, got %#v", response.Data)
+	}
+}

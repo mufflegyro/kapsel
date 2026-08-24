@@ -95,14 +95,15 @@ LIMIT ?`, quoteMatch(term), limit)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := hydrateResults(ctx, db, results); err != nil {
+	results, err = hydrateResults(ctx, db, results)
+	if err != nil {
 		return nil, err
 	}
 
 	return results, nil
 }
 
-func hydrateResults(ctx context.Context, db *sql.DB, results []Result) error {
+func hydrateResults(ctx context.Context, db *sql.DB, results []Result) ([]Result, error) {
 	videoIndexes := map[string][]int{}
 	commentIndexes := map[string][]int{}
 	channelIndexes := map[string][]int{}
@@ -128,7 +129,7 @@ func hydrateResults(ctx context.Context, db *sql.DB, results []Result) error {
 	}
 	commentVideoIDs, err := loadCommentVideoIDs(ctx, db, mapKeys(commentIndexes))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for commentID, videoID := range commentVideoIDs {
 		for _, index := range commentIndexes[commentID] {
@@ -137,23 +138,34 @@ func hydrateResults(ctx context.Context, db *sql.DB, results []Result) error {
 			videoIndexes[videoID] = append(videoIndexes[videoID], index)
 		}
 	}
-	videoRecords, err := loadVideoRecords(ctx, db, mapKeys(videoIndexes))
+	videoRecords, membersOnly, err := loadVideoRecords(ctx, db, mapKeys(videoIndexes))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	applyRecords(results, videoIndexes, videoRecords)
 	channelRecords, err := loadChannelRecords(ctx, db, mapKeys(channelIndexes))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	applyRecords(results, channelIndexes, channelRecords)
 	playlistRecords, err := loadPlaylistRecords(ctx, db, mapKeys(playlistIndexes))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	applyRecords(results, playlistIndexes, playlistRecords)
 
-	return nil
+	if len(membersOnly) == 0 {
+		return results, nil
+	}
+	filtered := results[:0]
+	for _, result := range results {
+		if result.Record.Type == "video" && membersOnly[result.Record.ID] {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
+
+	return filtered, nil
 }
 
 func loadCommentVideoIDs(ctx context.Context, db *sql.DB, ids []string) (map[string]string, error) {
@@ -178,10 +190,11 @@ func loadCommentVideoIDs(ctx context.Context, db *sql.DB, ids []string) (map[str
 	return videoIDs, rows.Err()
 }
 
-func loadVideoRecords(ctx context.Context, db *sql.DB, ids []string) (map[string]Record, error) {
+func loadVideoRecords(ctx context.Context, db *sql.DB, ids []string) (map[string]Record, map[string]bool, error) {
 	records := map[string]Record{}
+	membersOnly := map[string]bool{}
 	if len(ids) == 0 {
-		return records, nil
+		return records, membersOnly, nil
 	}
 	rows, err := db.QueryContext(ctx, `
 SELECT
@@ -193,13 +206,14 @@ SELECT
 	  v.keep_forever,
 	  v.thumbnail_path,
   v.thumbnail_url,
+  v.members_only,
   COALESCE(c.id, ''),
   COALESCE(c.name, '')
 FROM videos v
 LEFT JOIN channels c ON c.id = v.channel_id
 WHERE v.id IN (`+placeholders(len(ids))+`)`, stringArgs(ids)...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -207,6 +221,7 @@ WHERE v.id IN (`+placeholders(len(ids))+`)`, stringArgs(ids)...)
 		var channelID string
 		var channelName string
 		var keepForever int
+		var membersOnlyFlag int
 		record := Record{Type: "video"}
 		if err := rows.Scan(
 			&id,
@@ -217,20 +232,29 @@ WHERE v.id IN (`+placeholders(len(ids))+`)`, stringArgs(ids)...)
 			&keepForever,
 			&record.ThumbnailPath,
 			&record.ThumbnailURL,
+			&membersOnlyFlag,
 			&channelID,
 			&channelName,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		record.ID = id
 		record.KeepForever = keepForever == 1
+		if membersOnlyFlag == 1 {
+			membersOnly[id] = true
+			continue
+		}
 		if channelID != "" || channelName != "" {
 			record.Channel = &ChannelInfo{ID: channelID, Name: channelName}
 		}
 		records[id] = record
 	}
 
-	return records, rows.Err()
+	if rows.Err() != nil {
+		return nil, nil, rows.Err()
+	}
+
+	return records, membersOnly, nil
 }
 
 func loadChannelRecords(ctx context.Context, db *sql.DB, ids []string) (map[string]Record, error) {

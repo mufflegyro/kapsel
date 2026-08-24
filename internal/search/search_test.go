@@ -117,7 +117,9 @@ INSERT INTO comments (id, video_id, text) VALUES ('comment-2', 'vid-2', 'Second 
 		{OwnerType: "subtitle", OwnerID: "vid-1", Field: "text:en:downloaded", Snippet: "subtitle snippet", Rank: 0.4},
 	}
 
-	if err := hydrateResults(context.Background(), db, results); err != nil {
+	var err error
+	results, err = hydrateResults(context.Background(), db, results)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,4 +245,27 @@ func findResult(t *testing.T, results []Result, ownerType string, ownerID string
 
 	t.Fatalf("expected result %s/%s in %#v", ownerType, ownerID, results)
 	return Result{}
+}
+
+func TestSearchExcludesMembersOnlyVideos(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	seedHydratedSearchRecords(t, db)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('chan-mem', 'chan-mem', 'Members Channel');
+INSERT INTO videos (id, external_id, channel_id, title, description, duration_seconds, members_only) VALUES ('mem-1', 'mem-1', 'chan-mem', 'Private members capsul', 'Members ONLY secret archive', 90, 1);
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', 'mem-1', 'title', 'Private members capsul secret')`); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := Search(context.Background(), db, Query{Term: "secret", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Record.Type == "video" && result.Record.ID == "mem-1" {
+			t.Fatalf("expected members-only video to be excluded from search, got %#v", result)
+		}
+	}
 }

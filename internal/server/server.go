@@ -1383,6 +1383,7 @@ func listChannelVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 }
 
 func writeVideoListPage(w http.ResponseWriter, r *http.Request, db *sql.DB, mediaURLs mediaURLBuilder, where string, args []any, sortExpr string, page int, pageSize int) {
+	where = appendVideoFilter(where, "v.members_only = 0")
 	var total int
 	countQuery := "SELECT count(*) FROM videos v " + where
 	if err := db.QueryRowContext(r.Context(), countQuery, args...).Scan(&total); err != nil {
@@ -1437,6 +1438,7 @@ func listUpNextVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		unstartedSameChannel := available + " AND v.channel_id = ? AND " + unwatched
 		rows, err := db.QueryContext(r.Context(), videoListSelect("FROM videos v")+`
 WHERE v.id <> ?
+  AND v.members_only = 0
   AND `+unwatched+`
 ORDER BY CASE
   WHEN `+startedSameChannel+` THEN 0
@@ -2195,7 +2197,7 @@ func listPlaylistVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc 
 		}
 		rows, err := db.QueryContext(r.Context(), videoListSelect(`FROM playlist_entries pe
 JOIN videos v ON v.id = pe.video_id`)+`
-WHERE pe.playlist_id = ?
+WHERE pe.playlist_id = ? AND v.members_only = 0
 ORDER BY pe.position ASC, v.id ASC
 LIMIT ? OFFSET ?`, playlistID, pageSize, (page-1)*pageSize)
 		if err != nil {

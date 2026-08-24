@@ -26,5 +26,8 @@ tmp/
 # Local-only deployment notes
 LOCAL_DEPLOYMENT_RUNBOOK.md
 
+# Extracted personal Google Takeout subscription exports
+subscriptions.csv
+
 # Local browser screenshots; commit curated assets under docs/ instead.
 brave_screenshot_*.png

@@ -12,3 +12,4 @@
 - [ ] [Add a Docker deployment for LAN/HTTPS use](issues/add-docker-lan-https-deployment.md)
 - [ ] [Add YouTube metadata search with add-to-archive actions](issues/add-youtube-metadata-search.md)
 - [ ] [Mark members-only videos and disable their download](issues/mark-members-only-videos.md)
+- [ ] [Hide members-only videos from all views](issues/hide-members-only-videos.md)
