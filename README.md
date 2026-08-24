@@ -9,6 +9,7 @@ Yummle is a fork of Kapsel with a few extra features. Kapsel is a small self-hos
 - Save individual videos and channel videos into a local archive.
 - Watch downloaded media in the browser with seeking, captions, and preview thumbnails when available.
 - Browse videos, channels, playlists, watched state, and playback progress.
+- Google Takeout subscriptions.csv import.
 - Search local metadata with SQLite FTS, including imported titles, descriptions, subtitles, and comments.
 - Import core TubeArchivist backup data.
 - Back up and restore SQLite metadata separately from large media files.
