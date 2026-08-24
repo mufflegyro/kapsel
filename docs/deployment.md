@@ -1,5 +1,10 @@
 # Local Deployment
 
+> For a container deployment (Docker image with bundled yt-dlp/ffmpeg/deno,
+> `0.0.0.0` binding, and mounted media/download volumes), see
+> [`docs/docker.md`](docker.md) instead. This page covers a host install under
+> systemd.
+
 Kapsel deploys as one Go binary with embedded frontend assets, one SQLite database, and filesystem media storage. The release binary does not require Go, Node, pnpm, or Vite at runtime.
 
 ## Build A Release Binary

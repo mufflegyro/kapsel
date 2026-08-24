@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Container yt-dlp wrapper. Mirrors bin/kapsel-ytdlp for the Linux image:
+# prefer the bundled nightly standalone binary and explicitly select Deno as
+# the JS runtime so current YouTube clients can pass JS challenges.
+#
+# Kapsel runs this wrapper as KAPSEL_YTDLP_PATH. All arguments (downloads,
+# --version, --update-to nightly) pass through to yt-dlp. The auto-update job
+# writes the yt-dlp binary in place, which is why /usr/local/bin must remain
+# writable in the container (it is a writable layer by default).
+
+if [[ -x /usr/local/bin/yt-dlp ]]; then
+  exec /usr/local/bin/yt-dlp --js-runtimes deno:/usr/local/bin/deno "$@"
+fi
+
+exec yt-dlp "$@"

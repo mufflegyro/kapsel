@@ -1,0 +1,48 @@
+# Kapsel (Yummle) container deployment.
+#
+# Builds the release binary with the embedded UI, bundles yt-dlp (nightly) +
+# ffmpeg + deno, and keeps the SQLite database and downloaded media on named
+# volumes so both survive container recreation.
+#
+# Quick start:
+#   1. cp deploy/docker/kapsel.env.example deploy/docker/kapsel.env
+#   2. Replace the secrets and generate KAPSEL_AUTH_PASSWORD_HASH:
+#        docker compose run --rm kapsel hash-password
+#   3. docker compose up -d --build
+#   4. curl http://127.0.0.1:8080/api/health
+#
+# The container binds 0.0.0.0:8080 and the ports: mapping below publishes it
+# on ALL host interfaces. AUTH IS REQUIRED when the port is reachable beyond
+# localhost. To publish loopback-only, change the ports mapping to
+# "127.0.0.1:8080:8080". See docs/docker.md for HTTPS termination (Caddy
+# reverse proxy or self-signed) and the download+playback verification path.
+
+services:
+  kapsel:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+    image: kapsel:local
+    restart: unless-stopped
+    env_file:
+      - deploy/docker/kapsel.env
+    environment:
+      # Bind 0.0.0.0:8080 inside the container (all interfaces).
+      KAPSEL_ADDR: ":8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - kapsel-data:/data
+      - kapsel-media:/media
+      - kapsel-imports:/imports
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+volumes:
+  kapsel-data:
+  kapsel-media:
+  kapsel-imports:

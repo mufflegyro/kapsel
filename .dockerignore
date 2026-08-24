@@ -1,0 +1,34 @@
+# VCS
+.git
+.gitignore
+
+# Local data (never build these into the image)
+data/
+test-data/
+backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+subscriptions.csv
+playlists/
+tmp/
+
+# Build outputs
+dist/
+build/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+coverage.out
+
+# Node modules (installed fresh inside the frontend build stage)
+node_modules/
+frontend/node_modules/
+
+# Local-only notes and secrets
+.env
+.env.*
+!.env.example
+LOCAL_DEPLOYMENT_RUNBOOK.md
+macos-local.env.example

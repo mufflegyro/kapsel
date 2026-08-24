@@ -26,3 +26,15 @@ Add a Docker deployment that binds Kapsel on `0.0.0.0` so it can sit behind a lo
 - Existing packaging issue `package-kapsel-for-local-deployment.md` covers builds and service examples; this issue is the Docker-specific bind/mount/HTTPS path.
 - The nightly yt-dlp wrapper (`bin/kapsel-ytdlp`) must be made available inside the image; the image should bundle or fetch a current yt-dlp so updates keep working.
 - Consider `KAPSEL_YTDLP_UPDATE_INTERVAL` (auto-update) so the container keeps yt-dlp current.
+
+## Implementation plan (2026-08-24)
+
+- [x] `deploy/docker/Dockerfile`: multi-stage (node → frontend embed, golang → static binary, debian-slim runtime with ffmpeg + curl + deno + yt-dlp nightly standalone).
+- [x] `deploy/docker/kapsel-ytdlp`: Linux wrapper mirroring `bin/kapsel-ytdlp`, selecting the bundled nightly and Deno JS runtime.
+- [x] `deploy/docker/docker-entrypoint.sh`: create/chown mount points, drop privileges to a non-root `kapsel` user.
+- [x] `deploy/docker/kapsel.env.example`: container paths (`/data`, `/media`, `/imports`), `KAPSEL_ADDR=:8080` (0.0.0.0), wrapper yt-dlp path.
+- [x] `docker-compose.yml`: build context repo root, env_file, `0.0.0.0:8080:8080` publish, named volumes for data/media/imports, healthcheck, restart policy.
+- [x] `.dockerignore` at repo root (data, test-data, dist, node_modules, playlists, subscriptions.csv, backups).
+- [x] `docs/docker.md`: quick start, auth-required warning for non-loopback binding, HTTPS termination (Caddy reverse proxy + self-signed), upgrade/backup, download+playback verification path.
+- [x] `scripts/docker-smoke.sh`: fresh-volume startup, health, migration, tool availability, media persistence across recreation.
+- [x] Build image + run smoke locally, then commit.
