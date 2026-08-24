@@ -52,7 +52,6 @@ BUILD_PATHS=(
   frontend/index.html
   frontend/vite.config.js
   frontend/src
-  docker-compose.yml
 )
 
 # ---- 1. build file list and rsync to host --------------------------------

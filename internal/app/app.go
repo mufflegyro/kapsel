@@ -119,7 +119,9 @@ func (a *App) RunJobs(ctx context.Context) error {
 	if a == nil || a.Runner == nil {
 		return nil
 	}
-	go a.runChannelAutoDownloadScheduler(ctx, time.Hour)
+	if a.Config.ChannelAutoDownloadInterval > 0 {
+		go a.runChannelAutoDownloadScheduler(ctx, time.Hour)
+	}
 	go a.runRetentionScheduler(ctx, time.Hour)
 	go a.runYTDLPUpdateScheduler(ctx, time.Hour)
 
@@ -144,14 +146,16 @@ func (a *App) runYTDLPUpdateScheduler(ctx context.Context, interval time.Duratio
 	}
 }
 
-func (a *App) runChannelAutoDownloadScheduler(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = time.Hour
+func (a *App) runChannelAutoDownloadScheduler(ctx context.Context, tick time.Duration) {
+	if tick <= 0 {
+		tick = time.Hour
 	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 	for {
-		if _, err := download.EnsureChannelAutoDownloadJobs(ctx, a.DB, a.Jobs, download.ChannelAutoScheduleOptions{}); err != nil && ctx.Err() == nil {
+		if _, err := download.EnsureChannelAutoDownloadJobs(ctx, a.DB, a.Jobs, download.ChannelAutoScheduleOptions{
+			Interval: a.Config.ChannelAutoDownloadInterval,
+		}); err != nil && ctx.Err() == nil {
 			slog.Error("channel auto-download scheduler failed", "error", err)
 		}
 		select {
