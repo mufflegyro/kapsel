@@ -3173,16 +3173,9 @@
           {:else if playlistPage.videos.length === 0}
             <div class="state compact"><strong>No videos on this page.</strong><span>Use pagination to return to available playlist entries.</span></div>
           {:else}
-            <div class="result-list">
+            <div class="video-grid playlist-grid">
               {#each playlistPage.videos as item (item.id)}
-                <a href={videoHref(item.id)} onclick={event => navigate(event, videoHref(item.id))}>
-                  <span class:has-thumbnail={!!item.thumbnail_url} class="result-thumb" style={thumbnailStyle(item)} aria-hidden="true">{#if item.thumbnail_url}<img src={item.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{thumbnailFallback(item)}{/if}</span>
-                  <div class="result-copy">
-                    <span>{metadataLine(item)}</span>
-                    <strong>{item.title}</strong>
-                    <p>{item.description || 'No description was imported for this video.'}</p>
-                  </div>
-                </a>
+                <VideoCard {item} showChannel={false} flat={true} enableCatalogDownload={true} downloadJob={catalogVideoJobs[item.id]} {navigate} onDownload={downloadCatalogItem} downloadDisabled={catalogDownloadDisabled} />
               {/each}
             </div>
             <PaginationControls label="Playlist video pagination" page={playlistPage.pagination.page} last={lastPage(playlistPage.pagination)} onPageChange={changePlaylistVideosPage} />

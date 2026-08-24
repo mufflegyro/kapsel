@@ -2152,6 +2152,10 @@ button.thumbnail-link:disabled {
   grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
 }
 
+.playlist-grid {
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+}
+
 .video-tile.flat .thumb {
   border-radius: 0.8rem;
 }
@@ -2523,6 +2527,7 @@ button.thumbnail-link:disabled {
 
   .video-grid,
   .channel-grid,
+  .playlist-grid,
   .recommendations {
     grid-template-columns: 1fr;
   }
