@@ -7,3 +7,4 @@
 - [ ] [Opt-in retention for manual downloads](issues/opt-in-retention-for-manual-downloads.md)
 - [ ] [Add automatic yt-dlp nightly updates](issues/add-auto-ytdlp-nightly-update.md)
 - [ ] [Import subscriptions from Google Takeout subscriptions.csv](issues/import-subscriptions-csv.md)
+- [ ] [Delete a channel and all its content](issues/delete-channel-and-content.md)

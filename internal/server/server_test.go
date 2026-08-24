@@ -5099,3 +5099,66 @@ func (r *serverYTDLPRunner) Run(_ context.Context, command download.Command) ([]
 
 	return r.stdout, r.err
 }
+
+func TestDeleteChannelRemovesCatalogOnlyVideos(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name, subscribed, updated_at)
+VALUES ('chan-purge', 'chan-purge', 'Purge Me', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+	// Catalog-only videos: archived metadata with no downloaded media.
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title, duration_seconds, published_at, archived_at)
+VALUES ('vid-1', 'vid-1', 'chan-purge', 'Catalog One', 120, '2026-01-01', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+       ('vid-2', 'vid-2', 'chan-purge', 'Catalog Two', 90, '2026-01-02', strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', 'vid-1', 'title', 'Catalog One'),
+       ('video', 'vid-2', 'title', 'Catalog Two'),
+       ('channel', 'chan-purge', 'name', 'Purge Me')`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/channels/chan-purge", nil)
+	NewHandler(WithDatabase(db), WithSupportedSchemaVersion(supportedSchemaVersion(t)), WithMedia(t.TempDir(), media.NewSigner("test-secret"))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertServerScalar(t, db, "SELECT count(*) FROM channels WHERE id = 'chan-purge'", int64(0))
+	assertServerScalar(t, db, "SELECT count(*) FROM videos WHERE channel_id = 'chan-purge'", int64(0))
+	assertServerScalar(t, db, "SELECT count(*) FROM search_documents WHERE owner_type = 'video' AND owner_id IN ('vid-1','vid-2')", int64(0))
+	assertServerScalar(t, db, "SELECT count(*) FROM search_documents WHERE owner_type = 'channel' AND owner_id = 'chan-purge'", int64(0))
+}
+
+func TestDeleteChannelRefusesWhenVideosHaveMedia(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name, subscribed, updated_at)
+VALUES ('chan-media', 'chan-media', 'Keep Me', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title, duration_seconds, published_at, archived_at, media_path)
+VALUES ('vid-m', 'vid-m', 'chan-media', 'Downloaded One', 120, '2026-01-01', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'videos/vid-m.mp4')`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/channels/chan-media", nil)
+	NewHandler(WithDatabase(db), WithSupportedSchemaVersion(supportedSchemaVersion(t)), WithMedia(t.TempDir(), media.NewSigner("test-secret"))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertServerScalar(t, db, "SELECT count(*) FROM channels WHERE id = 'chan-media'", int64(1))
+	assertServerScalar(t, db, "SELECT count(*) FROM videos WHERE id = 'vid-m'", int64(1))
+}

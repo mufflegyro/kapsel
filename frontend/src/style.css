@@ -2533,3 +2533,41 @@ button.thumbnail-link:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Channel list rows pair the navigable card with a remove action. */
+.channel-row {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.channel-row .channel-list a {
+  height: 100%;
+  width: 100%;
+}
+
+.channel-remove {
+  align-self: center;
+  background: transparent;
+  border: 1px solid rgba(230, 90, 90, 0.5);
+  border-radius: 0.75rem;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 0.55rem 0.9rem;
+  text-transform: uppercase;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.channel-remove:hover {
+  background: rgba(230, 90, 90, 0.14);
+  border-color: rgba(230, 90, 90, 0.8);
+  color: #ffffff;
+}
+
+.channel-remove:disabled {
+  cursor: default;
+  opacity: 0.55;
+}

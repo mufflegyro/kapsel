@@ -79,6 +79,7 @@
   let channelRequestToken = 0;
   let channelListRequestToken = 0;
   let channelSubscriptionRequestToken = 0;
+  let channelDeleteRequestToken = 0;
   let keepForeverRequestToken = 0;
   let markPlayedRequestToken = 0;
   let deleteVideoMediaRequestToken = 0;
@@ -130,6 +131,7 @@
   let catalogVideoJobs = {};
   let scanJob = { status: 'idle', job: null, error: '' };
   let channelSubscriptionAction = { status: 'idle', error: '' };
+  let channelDeleteAction = { status: 'idle', error: '' };
   let keepForeverAction = { status: 'idle', error: '' };
   let markPlayedAction = { status: 'idle', error: '' };
   let deleteVideoMediaAction = { status: 'idle', error: '' };
@@ -1208,6 +1210,29 @@
       if (requestToken !== channelSubscriptionRequestToken || channelPage.item?.id !== item.id) return;
       channelSubscriptionOverride = { id: '', subscribed: null };
       channelSubscriptionAction = { status: 'error', error: error.message };
+    }
+  }
+
+  async function deleteChannel(id) {
+    if (channelDeleteAction.status === 'loading') return;
+    const found = channelListPage.channels.find(c => c.id === id) || channelPage.item;
+    const name = (found && found.name) || 'this channel';
+    const confirmed = window.confirm(`Remove "${name}" from the channel library?\n\nCatalog metadata entries are removed too. Channels with downloaded media or playlists cannot be removed.`);
+    if (!confirmed) return;
+    const requestToken = ++channelDeleteRequestToken;
+    channelDeleteAction = { status: 'loading', error: '' };
+    try {
+      await requestNoContent(`/api/channels/${encodeURIComponent(id)}`, 'DELETE');
+      if (requestToken !== channelDeleteRequestToken) return;
+      channelDeleteAction = { status: 'succeeded', error: '' };
+      if (channelPage.item?.id === id) {
+        channelPage = { status: 'idle', item: null, videos: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
+        navigate({ preventDefault() {}, button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, '/channels');
+      }
+      await loadChannels({ showLoading: false });
+    } catch (error) {
+      if (requestToken !== channelDeleteRequestToken) return;
+      channelDeleteAction = { status: 'error', error: error.message };
     }
   }
 
@@ -3043,16 +3068,20 @@
         {:else if channelListPage.channels.length === 0}
           <div class="state compact"><strong>No channels yet.</strong><span>Add a channel or import TubeArchivist metadata to populate this page.</span></div>
         {:else}
+          {#if channelDeleteAction.status === 'error'}<div role="alert" class="job-state compact state-error">Could not remove channel: {channelDeleteAction.error}</div>{:else if channelDeleteAction.status === 'succeeded'}<div role="status" aria-live="polite" class="job-state compact">Channel removed.</div>{/if}
           <div class="result-list channel-list">
             {#each channelListPage.channels as channel (channel.id)}
-              <a href={channelHref(channel)} onclick={event => navigate(event, channelHref(channel))}>
-                <span class:has-thumbnail={!!channel.thumbnail_url} class="result-thumb" style={thumbnailStyle(channel)} aria-hidden="true">{#if channel.thumbnail_url}<img src={channel.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{channelInitial(channel.name)}{/if}</span>
-                <div class="result-copy">
-                  <strong>{channel.name}</strong>
-                  <span>{formatVideoCount(channel.video_count)}{channel.subscribed ? ' · Auto-download on' : ''}</span>
-                  <p>{channel.description || 'No channel description has been imported yet.'}</p>
-                </div>
-              </a>
+              <div class="channel-row">
+                <a href={channelHref(channel)} onclick={event => navigate(event, channelHref(channel))}>
+                  <span class:has-thumbnail={!!channel.thumbnail_url} class="result-thumb" style={thumbnailStyle(channel)} aria-hidden="true">{#if channel.thumbnail_url}<img src={channel.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{channelInitial(channel.name)}{/if}</span>
+                  <div class="result-copy">
+                    <strong>{channel.name}</strong>
+                    <span>{formatVideoCount(channel.video_count)}{channel.subscribed ? ' · Auto-download on' : ''}</span>
+                    <p>{channel.description || 'No channel description has been imported yet.'}</p>
+                  </div>
+                </a>
+                <button type="button" class="channel-remove" onclick={() => deleteChannel(channel.id)} disabled={channelDeleteAction.status === 'loading'}>{channelDeleteAction.status === 'loading' ? 'Removing...' : 'Remove channel'}</button>
+              </div>
             {/each}
           </div>
           <PaginationControls label="Channel list pagination" page={channelListPage.pagination.page} last={lastPage(channelListPage.pagination)} onPageChange={changeChannelsPage} />
@@ -3071,9 +3100,10 @@
               <h1>{channelPage.item.name}</h1>
               <p><strong>{channelHandle(channelPage.item)}</strong> · {formatVideoCount(channelPage.item.video_count)} · {channelPage.item.subscribed ? 'Daily auto-download on' : 'Daily auto-download off'}</p>
               <RichText text={channelPage.item.description || 'No channel description has been imported yet.'} collapsible={true} collapsedMaxHeight="25vh" />
-              <div class="channel-actions"><button type="button" onclick={scanCurrentChannel} disabled={scanSubmitDisabled}>{scanJob.status === 'loading' ? 'Starting scan' : isChannelJobActive(scanJob.status) ? 'Scanning' : 'Scan channel'}</button><button type="button" class:active={channelPage.item.subscribed} aria-label="Auto-download" aria-pressed={channelPage.item.subscribed} onclick={toggleChannelAutoDownload} disabled={channelSubscriptionAction.status === 'loading'}>{channelSubscriptionAction.status === 'loading' ? 'Saving auto-download' : channelPage.item.subscribed ? 'Auto-download on' : 'Auto-download off'}</button></div>
+              <div class="channel-actions"><button type="button" onclick={scanCurrentChannel} disabled={scanSubmitDisabled}>{scanJob.status === 'loading' ? 'Starting scan' : isChannelJobActive(scanJob.status) ? 'Scanning' : 'Scan channel'}</button><button type="button" class:active={channelPage.item.subscribed} aria-label="Auto-download" aria-pressed={channelPage.item.subscribed} onclick={toggleChannelAutoDownload} disabled={channelSubscriptionAction.status === 'loading'}>{channelSubscriptionAction.status === 'loading' ? 'Saving auto-download' : channelPage.item.subscribed ? 'Auto-download on' : 'Auto-download off'}</button><button type="button" onclick={() => deleteChannel(channelPage.item.id)} disabled={channelDeleteAction.status === 'loading'}>{channelDeleteAction.status === 'loading' ? 'Removing...' : 'Remove channel'}</button></div>
               {#if scanJob.status !== 'idle'}<div role={scanJob.status === 'error' || scanJob.status === 'failed' ? 'alert' : 'status'} aria-live={scanJob.status === 'error' || scanJob.status === 'failed' ? 'assertive' : 'polite'} class:busy={scanJob.status === 'loading' || scanJob.status === 'queued' || scanJob.status === 'running'} class:done={scanJob.status === 'succeeded'} class:state-error={scanJob.status === 'error' || scanJob.status === 'failed'} class="channel-action-status"><span aria-hidden="true"></span><strong>{#if scanJob.status === 'queued'}Queued{:else if scanJob.status === 'running'}Scanning{:else if scanJob.status === 'succeeded'}Refreshed{:else if scanJob.status === 'failed'}Scan failed{:else if scanJob.status === 'error'}Scan unavailable{:else}Scan status{/if}</strong><small>{#if scanJob.status === 'queued'}Waiting for a worker.{:else if scanJob.status === 'running'}Refreshing the channel catalog.{:else if scanJob.status === 'succeeded'}Channel catalog is up to date.{:else if scanJob.status === 'failed'}{scanJob.error || 'Unknown error'}{:else if scanJob.status === 'error'}{scanJob.error}{:else}{scanJob.status}{/if}</small></div>{/if}
               {#if channelSubscriptionAction.status === 'error'}<div role="alert" class="job-state compact state-error">Could not update auto-download: {channelSubscriptionAction.error}</div>{:else if channelSubscriptionAction.status === 'succeeded'}<div role="status" aria-live="polite" class="job-state compact">Daily auto-download {channelPage.item.subscribed ? 'enabled' : 'disabled'}.</div>{/if}
+              {#if channelDeleteAction.status === 'error'}<div role="alert" class="job-state compact state-error">Could not remove channel: {channelDeleteAction.error}</div>{:else if channelDeleteAction.status === 'succeeded'}<div role="status" aria-live="polite" class="job-state compact">Channel removed.</div>{/if}
             </div>
           </header>
           <nav class="channel-tabs" aria-label="Channel sections"><a class="active" href="/channels/{encodeURIComponent(channelID)}" onclick={event => navigate(event, `/channels/${encodeURIComponent(channelID)}`)}>Videos</a><a href="/search?q={encodeURIComponent(channelPage.item.name)}" onclick={event => navigate(event, `/search?q=${encodeURIComponent(channelPage.item.name)}`)}>Search</a></nav>

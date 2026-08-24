@@ -2221,11 +2221,71 @@ func deleteChannel(db *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		result, err := tx.ExecContext(ctx, `
-DELETE FROM channels
-WHERE id = ?
-  AND NOT EXISTS (SELECT 1 FROM videos WHERE channel_id = ?)
-  AND NOT EXISTS (SELECT 1 FROM playlists WHERE channel_id = ?)`, id, id, id)
+		// Refuse when the channel has downloaded media or playlists (real local
+		// content). Catalog-only video rows (empty media_path) are removable.
+		var hasLocalContent int
+		if err := tx.QueryRowContext(ctx, `
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM videos WHERE channel_id = ? AND media_path <> ''
+) OR EXISTS (
+  SELECT 1 FROM playlists WHERE channel_id = ?
+) THEN 1 ELSE 0 END`, id, id).Scan(&hasLocalContent); err != nil {
+			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+			return
+		}
+		if hasLocalContent == 1 {
+			if err := tx.Rollback(); err != nil {
+				http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+				return
+			}
+			if exists, err := rowExists(ctx, db, "SELECT 1 FROM channels WHERE id = ?", id); err != nil {
+				http.Error(w, "failed to load channel", http.StatusInternalServerError)
+			} else if !exists {
+				http.NotFound(w, r)
+			} else {
+				writeJSONError(w, "channel still has downloaded media or playlists", http.StatusConflict)
+			}
+			return
+		}
+
+		// Remove the channel's catalog-only video rows and their denormalized
+		// rows before deleting the channel itself.
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM videos WHERE channel_id = ?", id)
+		if err != nil {
+			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+			return
+		}
+		videoIDs := []string{}
+		for rows.Next() {
+			var videoID string
+			if err := rows.Scan(&videoID); err != nil {
+				rows.Close()
+				http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+				return
+			}
+			videoIDs = append(videoIDs, videoID)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+			return
+		}
+		for _, videoID := range videoIDs {
+			if err := denorm.DeleteSearchDocumentsForOwner(ctx, tx, "video", videoID); err != nil {
+				http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+				return
+			}
+			if err := denorm.DeleteMediaAssetsForOwner(ctx, tx, "video", videoID); err != nil {
+				http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+				return
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM videos WHERE channel_id = ?", id); err != nil {
+			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+			return
+		}
+
+		result, err := tx.ExecContext(ctx, "DELETE FROM channels WHERE id = ?", id)
 		if err != nil {
 			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
 			return
@@ -2255,13 +2315,7 @@ WHERE id = ?
 			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
 			return
 		}
-		if exists, err := rowExists(ctx, db, "SELECT 1 FROM channels WHERE id = ?", id); err != nil {
-			http.Error(w, "failed to load channel", http.StatusInternalServerError)
-		} else if !exists {
-			http.NotFound(w, r)
-		} else {
-			writeJSONError(w, "channel still has local videos or playlists", http.StatusConflict)
-		}
+		http.NotFound(w, r)
 	}
 }
 
