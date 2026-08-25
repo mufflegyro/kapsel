@@ -2074,6 +2074,32 @@ test('playlist URL import enqueues a background job and rejects invalid links', 
   await expect(urlInput).toHaveValue('');
 });
 
+test('playlist can be removed from its detail page', async ({ page }) => {
+  const playlistName = `E2E-Remove-Me-${Date.now()}`;
+  await page.goto('/playlists');
+  await expect(page.getByRole('heading', { name: 'Playlist library' })).toBeVisible();
+
+  // Import a playlist to have something to remove.
+  await page.setInputFiles('#playlist-csv-file', {
+    name: `${playlistName}.csv`,
+    mimeType: 'text/csv',
+    buffer: Buffer.from('Video ID\nAAAAAAAAAAA\n'),
+  });
+  await page.getByRole('button', { name: 'Import playlist' }).click();
+  await expect(page.getByTestId('playlist-upload-status')).toContainText(`Imported “${playlistName}”`);
+
+  const playlistLink = page.getByRole('link', { name: new RegExp(playlistName) });
+  await expect(playlistLink).toBeVisible();
+  await playlistLink.click();
+  await expect(page.getByRole('heading', { name: playlistName })).toBeVisible();
+
+  // Removing it is confirmed and returns to the playlist list without it.
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Remove playlist' }).click();
+  await expect(page.getByRole('heading', { name: 'Playlist library' })).toBeVisible();
+  await expect(page.getByRole('link', { name: new RegExp(playlistName) })).toHaveCount(0);
+});
+
 async function audioEventCount(page, name) {
   return page.evaluate(eventName => (window.__kapselAudioEvents || []).filter(event => event.name === eventName).length, name);
 }

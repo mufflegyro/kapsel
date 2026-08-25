@@ -80,6 +80,7 @@
   let channelListRequestToken = 0;
   let channelSubscriptionRequestToken = 0;
   let channelDeleteRequestToken = 0;
+  let playlistDeleteRequestToken = 0;
   let keepForeverRequestToken = 0;
   let markPlayedRequestToken = 0;
   let deleteVideoMediaRequestToken = 0;
@@ -134,7 +135,9 @@
   let scanJob = { status: 'idle', job: null, error: '' };
   let channelSubscriptionAction = { status: 'idle', error: '' };
   let channelDeleteAction = { status: 'idle', error: '' };
+  let playlistDeleteAction = { status: 'idle', error: '' };
   let channelDeleteResetTimer = null;
+  let playlistDeleteResetTimer = null;
   let keepForeverAction = { status: 'idle', error: '' };
   let markPlayedAction = { status: 'idle', error: '' };
   let deleteVideoMediaAction = { status: 'idle', error: '' };
@@ -616,6 +619,9 @@
     const isSamePlaylist = playlistPage.item?.id === id;
     const page = options.page ?? (isSamePlaylist ? playlistPage.pagination.page : 1) ?? 1;
     const pageSize = playlistPage.pagination.page_size || 50;
+    if (!isSamePlaylist) {
+      playlistDeleteAction = { status: 'idle', error: '' };
+    }
     if (options.showLoading !== false) {
       playlistPage = { ...playlistPage, status: 'loading', error: '' };
     }
@@ -1311,6 +1317,33 @@
     } catch (error) {
       if (requestToken !== channelDeleteRequestToken) return;
       channelDeleteAction = { status: 'error', error: error.message };
+    }
+  }
+
+  async function deletePlaylist(id) {
+    if (playlistDeleteAction.status === 'loading') return;
+    const item = playlistPage.item;
+    const name = (item && item.title) || 'this playlist';
+    const confirmed = window.confirm(`Remove "${name}" from the playlist library?\n\nThe playlist and its entries are removed. Archived videos are kept.`);
+    if (!confirmed) return;
+    const requestToken = ++playlistDeleteRequestToken;
+    playlistDeleteAction = { status: 'loading', error: '' };
+    try {
+      await requestNoContent(`/api/playlists/${encodeURIComponent(id)}`, 'DELETE');
+      if (requestToken !== playlistDeleteRequestToken) return;
+      playlistDeleteAction = { status: 'succeeded', error: '' };
+      if (playlistDeleteResetTimer) clearTimeout(playlistDeleteResetTimer);
+      playlistDeleteResetTimer = setTimeout(() => {
+        if (playlistDeleteAction.status === 'succeeded') playlistDeleteAction = { status: 'idle', error: '' };
+      }, 4000);
+      if (playlistPage.item?.id === id) {
+        playlistPage = { status: 'idle', item: null, videos: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
+        navigate({ preventDefault() {}, button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, '/playlists');
+      }
+      await loadPlaylists({ showLoading: false });
+    } catch (error) {
+      if (requestToken !== playlistDeleteRequestToken) return;
+      playlistDeleteAction = { status: 'error', error: error.message };
     }
   }
 
@@ -3307,6 +3340,8 @@
           <h1>{playlistPage.item.title}</h1>
           <span>{formatVideoCount(playlistPage.item.video_count)}{playlistPage.item.channel?.name ? ` from ${playlistPage.item.channel.name}` : ''}</span>
           {#if playlistPage.item.description}<p>{playlistPage.item.description}</p>{/if}
+          <div class="channel-actions"><button type="button" class="channel-remove" onclick={() => deletePlaylist(playlistPage.item.id)} disabled={playlistDeleteAction.status === 'loading'}>{playlistDeleteAction.status === 'loading' ? 'Removing...' : 'Remove playlist'}</button></div>
+          {#if playlistDeleteAction.status === 'error'}<div role="alert" class="job-state compact state-error">Could not remove playlist: {playlistDeleteAction.error}</div>{:else if playlistDeleteAction.status === 'succeeded'}<div role="status" aria-live="polite" class="job-state compact" data-testid="playlist-remove-status">Playlist removed.</div>{/if}
           {#if playlistPage.videos.length === 0 && playlistPage.pagination.total === 0}
             <div class="state compact"><strong>No videos in this playlist.</strong><span>Playlist entries will appear after import or sync.</span></div>
           {:else if playlistPage.videos.length === 0}

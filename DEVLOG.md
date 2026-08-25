@@ -163,3 +163,18 @@ first import and no metadata scans are enqueued.
 - Tests: handler test now asserts all entries linked with no scan jobs,
   uploader channel created, existing video keeps `catalog_position 7`, new
   rows at -1. `go test ./...` green.
+
+## 2026-08-25 — Remove playlist button on the playlist detail page
+
+The backend `DELETE /api/playlists/{id}` (removes the playlist row, cascades
+its entries, deletes search docs, keeps archived videos) already existed and
+was tested; the detail page just had no way to reach it. Added a "Remove
+playlist" button on the playlist detail page mirroring the channel delete
+flow: confirm dialog, DELETE, navigate back to the playlist list, transient
+"Playlist removed." status, error state on failure. Reuses `.channel-actions`
+styling.
+
+- e2e: `playlist can be removed from its detail page` — imports a CSV
+  playlist, opens it, confirms the dialog, asserts it leaves the list.
+- Tested live against the empty `csv-batocera-videos` playlist (204, row +
+  search docs gone).
