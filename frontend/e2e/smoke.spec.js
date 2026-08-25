@@ -2024,6 +2024,34 @@ async function firstCaptionCueBox(page) {
   });
 }
 
+test('playlist CSV upload imports a playlist into the library', async ({ page }) => {
+  // Use a per-run unique file name so the test is robust whether or not a
+  // previous project/run already imported a playlist (the shared test server
+  // keeps its temp DB across projects in one run).
+  const playlistName = `E2E-Imported-${Date.now()}`;
+  await page.goto('/playlists');
+  await expect(page.getByRole('heading', { name: 'Playlist library' })).toBeVisible();
+
+  await page.setInputFiles('#playlist-csv-file', {
+    name: `${playlistName}.csv`,
+    mimeType: 'text/csv',
+    buffer: Buffer.from('Video ID,Playlist Video Creation Timestamp\nMoonBrief01,2026-05-04T12:00:00+00:00\nAAAAAAAAAAA,2026-05-05T12:00:00+00:00\n'),
+  });
+
+  const importButton = page.getByRole('button', { name: 'Import playlist' });
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+
+  await expect(page.getByTestId('playlist-upload-status')).toContainText(`Imported “${playlistName}”`);
+  await expect(page.getByTestId('playlist-upload-status')).toContainText('1 linked');
+  await expect(page.getByTestId('playlist-upload-status')).toContainText('1 missing');
+
+  // The refreshed playlist list shows the new playlist derived from the file name.
+  const playlistLink = page.getByRole('link', { name: new RegExp(playlistName) });
+  await expect(playlistLink).toBeVisible();
+  await expect(playlistLink).toContainText('1 video');
+});
+
 async function audioEventCount(page, name) {
   return page.evaluate(eventName => (window.__kapselAudioEvents || []).filter(event => event.name === eventName).length, name);
 }
