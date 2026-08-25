@@ -1734,7 +1734,7 @@ func (d *Downloader) HandleVideoMetadataScan(ctx context.Context, job jobs.Job) 
 			return err
 		}
 	}
-	if err := d.upsertCatalogVideo(ctx, d.db, video); err != nil {
+	if err := d.upsertCatalogVideo(ctx, d.db, video, false); err != nil {
 		return err
 	}
 
@@ -1785,16 +1785,16 @@ func (d *Downloader) HandleChannelScan(ctx context.Context, job jobs.Job) error 
 }
 
 // HandlePlaylistImport runs a playlist_import job: it fetches a YouTube
-// playlist's flat entry list, then imports it with the same semantics as the
-// CSV path (upsert the playlist under its deterministic yt-<listID> id, link
-// videos already in the archive, enqueue metadata scans for missing ones).
+// playlist's flat entry list and imports it in one pass — upsert the playlist
+// under its deterministic yt-<listID> id, hydrate catalog rows for every entry
+// from the flat dump (title, duration, channel, thumbnail), and link them all
+// into the playlist immediately. Catalog positions are preserved so importing a
+// playlist never reorders an existing channel catalog, and no metadata scans
+// are enqueued: the flat dump already carries the browsable metadata, so the
+// playlist is complete on first import.
 func (d *Downloader) HandlePlaylistImport(ctx context.Context, job jobs.Job) error {
 	if d.db == nil {
 		return errors.New("playlist import handler missing database")
-	}
-	store, err := d.jobStore()
-	if err != nil {
-		return err
 	}
 
 	var payload PlaylistImportPayload
@@ -1816,66 +1816,104 @@ func (d *Downloader) HandlePlaylistImport(ctx context.Context, job jobs.Job) err
 	if err != nil {
 		return ytdlpJobError(command, output, err)
 	}
-	entries, title, channelID, err := parsePlaylistImportOutput(output, listID)
+	metadata, err := parsePlaylistImportOutput(output)
 	if err != nil {
 		return err
 	}
-	if len(entries) == 0 {
+	playlistID := "yt-" + listID
+	title := strings.TrimSpace(firstNonEmpty(metadata.Title, listID))
+	if !isSafeMetadataValue(title) {
+		return errors.New("playlist title contains unsafe text")
+	}
+	description := strings.TrimSpace(metadata.Description)
+	if !isSafeMetadataText(description) {
+		return errors.New("playlist description contains unsafe text")
+	}
+	channelID := firstNonEmpty(metadata.ChannelID, metadata.UploaderID)
+	channelName := firstNonEmpty(metadata.Channel, metadata.Uploader, channelID)
+
+	// Flat entries map to catalog videos with the same shape channel scans use;
+	// dedupe happens inside catalogVideosFromEntries. New rows are not members
+	// of any channel catalog yet, so they get catalog_position -1.
+	videos := catalogVideosFromEntries(metadata.Entries, channelID, channelName, false)
+	for index := range videos {
+		videos[index].CatalogPosition = -1
+	}
+	if len(videos) == 0 {
 		return errors.New("playlist contains no videos")
 	}
+	// Skipped counts only entries that could not be mapped to a video row
+	// (no usable id); collapsed duplicates are linked, not skipped.
+	linkedByID := map[string]struct{}{}
+	for _, video := range videos {
+		linkedByID[video.ID] = struct{}{}
+	}
+	skipped := 0
+	for _, entry := range metadata.Entries {
+		if _, ok := linkedByID[channelEntryVideoID(entry)]; !ok {
+			skipped++
+		}
+	}
 
-	report, err := playlistimport.ImportInto(ctx, d.db, NewPlaylistImportEnqueuer(store), playlistimport.PlaylistIdentity{
-		ID:         "yt-" + listID,
-		ExternalID: listID,
-		Title:      title,
-		ChannelID:  channelID,
-	}, entries, playlistimport.ModeMetadataScan)
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Create/refresh the uploader channel so the playlist and its videos can
+	// reference it (the channel thumbnail is fetched by the channel's own scan;
+	// the playlist thumbnail is not the channel's).
+	if channelID != "" {
+		if err := d.upsertChannel(ctx, tx, channelID, channelName, description, ""); err != nil {
+			return err
+		}
+	}
+	if _, err := playlistimport.UpsertPlaylist(ctx, tx, playlistimport.PlaylistIdentity{
+		ID:          playlistID,
+		ExternalID:  listID,
+		Title:       title,
+		Description: description,
+		ChannelID:   channelID,
+	}); err != nil {
+		return err
+	}
+	for _, video := range videos {
+		if err := d.writeCatalogVideo(ctx, tx, video, true); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM playlist_entries WHERE playlist_id = ?", playlistID); err != nil {
+		return err
+	}
+	for position, video := range videos {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO playlist_entries (playlist_id, video_id, position)
+VALUES (?, ?, ?)`, playlistID, video.ID, position); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
 	return d.setJobResult(ctx, job.ID, playlistImportResult{
-		PlaylistID: "yt-" + listID,
+		PlaylistID: playlistID,
 		Title:      title,
-		Linked:     report.Linked,
-		Missing:    report.Missing,
-		Enqueued:   report.Enqueued,
-		Skipped:    report.Skipped,
-		Errors:     report.Errors,
+		Linked:     len(videos),
+		Skipped:    skipped,
 	})
 }
 
-// parsePlaylistImportOutput parses a yt-dlp flat playlist dump (--flat-playlist
-// --dump-single-json) into playlist entries, the playlist title, and the
-// uploader channel id. Entries without a usable video id are skipped and
-// duplicates are collapsed to their first occurrence so the playlist_entries
-// unique constraint cannot be tripped by a repeated video.
-func parsePlaylistImportOutput(output []byte, fallbackTitle string) ([]playlistimport.Entry, string, string, error) {
+// parsePlaylistImportOutput parses a yt-dlp flat playlist dump
+// (--flat-playlist --dump-single-json).
+func parsePlaylistImportOutput(output []byte) (channelMetadata, error) {
 	var metadata channelMetadata
 	if err := json.Unmarshal(output, &metadata); err != nil {
-		return nil, "", "", err
-	}
-	title := strings.TrimSpace(firstNonEmpty(metadata.Title, fallbackTitle))
-	if !isSafeMetadataValue(title) {
-		return nil, "", "", errors.New("playlist title contains unsafe text")
-	}
-	channelID := firstNonEmpty(metadata.ChannelID, metadata.UploaderID)
-
-	entries := []playlistimport.Entry{}
-	seen := map[string]struct{}{}
-	for _, entry := range metadata.Entries {
-		videoID := channelEntryVideoID(entry)
-		if videoID == "" {
-			continue
-		}
-		if _, ok := seen[videoID]; ok {
-			continue
-		}
-		seen[videoID] = struct{}{}
-		entries = append(entries, playlistimport.Entry{VideoID: videoID})
+		return channelMetadata{}, err
 	}
 
-	return entries, title, channelID, nil
+	return metadata, nil
 }
 
 // playlistEnqueuer adapts the job store to playlistimport.Enqueuer so the CSV,
@@ -2352,27 +2390,37 @@ func (d *Downloader) syncChannelCatalogPage(ctx context.Context, output []byte, 
 		}
 	}
 	for _, video := range videos {
-		if video.ChannelID != "" {
-			if err := d.upsertChannel(ctx, tx, video.ChannelID, video.ChannelName, "", ""); err != nil {
-				return channelCatalogPageResult{}, err
-			}
-		}
-		if err := d.upsertCatalogVideo(ctx, tx, video); err != nil {
-			return channelCatalogPageResult{}, err
-		}
-		videoTitle, videoDescription, err := d.videoSearchText(ctx, tx, video.ID)
-		if err != nil {
-			return channelCatalogPageResult{}, err
-		}
-		if err := d.upsertSearch(ctx, tx, "video", video.ID, "title", videoTitle); err != nil {
-			return channelCatalogPageResult{}, err
-		}
-		if err := d.upsertSearch(ctx, tx, "video", video.ID, "description", videoDescription); err != nil {
+		if err := d.writeCatalogVideo(ctx, tx, video, false); err != nil {
 			return channelCatalogPageResult{}, err
 		}
 	}
 
 	return result, tx.Commit()
+}
+
+// writeCatalogVideo upserts the catalog row for one flat-dump video: the
+// channel it belongs to (creating the channel row when needed), the video row
+// itself, and its search documents. preservePosition keeps an existing
+// catalog_position untouched (playlist imports must not reorder channel
+// catalogs); channel scans pass false so their ordering is authoritative.
+func (d *Downloader) writeCatalogVideo(ctx context.Context, exec sqlExecutor, video catalogVideo, preservePosition bool) error {
+	if video.ChannelID != "" {
+		if err := d.upsertChannel(ctx, exec, video.ChannelID, video.ChannelName, "", ""); err != nil {
+			return err
+		}
+	}
+	if err := d.upsertCatalogVideo(ctx, exec, video, preservePosition); err != nil {
+		return err
+	}
+	videoTitle, videoDescription, err := d.videoSearchText(ctx, exec, video.ID)
+	if err != nil {
+		return err
+	}
+	if err := d.upsertSearch(ctx, exec, "video", video.ID, "title", videoTitle); err != nil {
+		return err
+	}
+
+	return d.upsertSearch(ctx, exec, "video", video.ID, "description", videoDescription)
 }
 
 func (d *Downloader) videoSearchText(ctx context.Context, exec sqlExecutor, id string) (string, string, error) {
@@ -3460,7 +3508,7 @@ ON CONFLICT(source, external_id) DO UPDATE SET
 	return err
 }
 
-func (d *Downloader) upsertCatalogVideo(ctx context.Context, exec sqlExecutor, video catalogVideo) error {
+func (d *Downloader) upsertCatalogVideo(ctx context.Context, exec sqlExecutor, video catalogVideo, preservePosition bool) error {
 	_, err := exec.ExecContext(ctx, `
 INSERT INTO videos (
 	  id, external_id, channel_id, title, description, published_at, catalog_position, duration_seconds, view_count, thumbnail_url, updated_at
@@ -3477,7 +3525,7 @@ ON CONFLICT(id) DO UPDATE SET
 	    WHEN videos.media_path <> '' AND videos.published_at IS NOT NULL AND videos.published_at <> '' THEN videos.published_at
 	    ELSE excluded.published_at
 	  END,
-	  catalog_position = excluded.catalog_position,
+	  catalog_position = CASE WHEN ? THEN videos.catalog_position ELSE excluded.catalog_position END,
 	  duration_seconds = CASE WHEN excluded.duration_seconds > 0 THEN excluded.duration_seconds ELSE videos.duration_seconds END,
 	  view_count = CASE WHEN ? THEN excluded.view_count ELSE videos.view_count END,
 	  thumbnail_url = CASE WHEN excluded.thumbnail_url <> '' THEN excluded.thumbnail_url ELSE videos.thumbnail_url END,
@@ -3492,6 +3540,7 @@ ON CONFLICT(id) DO UPDATE SET
 		video.DurationSeconds,
 		video.ViewCount,
 		video.ThumbnailURL,
+		preservePosition,
 		video.HasViewCount,
 	)
 

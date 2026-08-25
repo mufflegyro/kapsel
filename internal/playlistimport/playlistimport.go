@@ -139,13 +139,15 @@ type Enqueuer interface {
 
 // PlaylistIdentity is the deterministic identity a playlist is upserted under:
 // a stable local id, the YouTube external id (list id for URL imports, the
-// title for CSV-derived playlists), the display title, and an optional channel
-// id that is linked only when that channel already exists in the archive.
+// title for CSV-derived playlists), the display title, an optional description,
+// and an optional channel id that is linked only when that channel already
+// exists in the archive.
 type PlaylistIdentity struct {
-	ID         string
-	ExternalID string
-	Title      string
-	ChannelID  string
+	ID          string
+	ExternalID  string
+	Title       string
+	Description string
+	ChannelID   string
 }
 
 // ImportFile parses the playlist export at path, creates or updates the
@@ -191,7 +193,7 @@ func ImportInto(ctx context.Context, db *sql.DB, enqueuer Enqueuer, identity Pla
 	}
 	report := Report{Playlists: 1}
 
-	playlistID, err := upsertPlaylist(ctx, db, identity)
+	playlistID, err := UpsertPlaylist(ctx, db, identity)
 	if err != nil {
 		return Report{}, err
 	}
@@ -269,11 +271,20 @@ func PlaylistIdentityFromPath(path string) PlaylistIdentity {
 	}
 }
 
-// upsertPlaylist creates or refreshes the playlist described by identity. A
-// channel id is linked only when the channel already exists in the archive
-// (the playlist_entries foreign key would reject an unknown channel). It
-// returns the playlist id.
-func upsertPlaylist(ctx context.Context, db *sql.DB, identity PlaylistIdentity) (string, error) {
+// playlistDB is the subset of *sql.DB and *sql.Tx the playlist writer needs,
+// so the CSV/CLI path can run on the database and the URL-import job can run
+// inside its transaction.
+type playlistDB interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// UpsertPlaylist creates or refreshes the playlist described by identity,
+// including its search document. A channel id is linked only when the channel
+// already exists in the archive (the playlist_entries foreign key would reject
+// an unknown channel). exec may be a *sql.DB or a transaction. It returns the
+// playlist id.
+func UpsertPlaylist(ctx context.Context, exec playlistDB, identity PlaylistIdentity) (string, error) {
 	playlistID := identity.ID
 	if strings.TrimSpace(playlistID) == "" {
 		return "", errors.New("playlist import missing playlist id")
@@ -286,10 +297,11 @@ func upsertPlaylist(ctx context.Context, db *sql.DB, identity PlaylistIdentity) 
 	if title == "" {
 		title = playlistID
 	}
+	description := strings.TrimSpace(identity.Description)
 	channelID := sql.NullString{String: identity.ChannelID, Valid: strings.TrimSpace(identity.ChannelID) != ""}
 	if channelID.Valid {
 		var exists int
-		if err := db.QueryRowContext(ctx, "SELECT 1 FROM channels WHERE id = ?", channelID.String).Scan(&exists); err != nil {
+		if err := exec.QueryRowContext(ctx, "SELECT 1 FROM channels WHERE id = ?", channelID.String).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				channelID = sql.NullString{}
 			} else {
@@ -298,19 +310,25 @@ func upsertPlaylist(ctx context.Context, db *sql.DB, identity PlaylistIdentity) 
 		}
 	}
 
-	_, err := db.ExecContext(ctx, `
-INSERT INTO playlists (id, external_id, channel_id, title, updated_at)
-VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	_, err := exec.ExecContext(ctx, `
+INSERT INTO playlists (id, external_id, channel_id, title, description, updated_at)
+VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(id) DO UPDATE SET
   external_id = excluded.external_id,
   channel_id = excluded.channel_id,
   title = excluded.title,
-  updated_at = excluded.updated_at`, playlistID, externalID, channelID, title)
+  description = CASE WHEN excluded.description <> '' THEN excluded.description ELSE playlists.description END,
+  updated_at = excluded.updated_at`, playlistID, externalID, channelID, title, description)
 	if err != nil {
 		return "", err
 	}
-	if err := denorm.SyncSearchDocument(ctx, db, "playlist", playlistID, "title", title); err != nil {
+	if err := denorm.SyncSearchDocument(ctx, exec, "playlist", playlistID, "title", title); err != nil {
 		return "", err
+	}
+	if description != "" {
+		if err := denorm.SyncSearchDocument(ctx, exec, "playlist", playlistID, "description", description); err != nil {
+			return "", err
+		}
 	}
 
 	return playlistID, nil

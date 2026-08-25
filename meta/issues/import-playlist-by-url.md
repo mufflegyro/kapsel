@@ -23,14 +23,19 @@ like `channel_scan`, not a synchronous request.
   (`https://www.youtube.com/playlist?list=<id>`, `watch?v=..&list=<id>`,
   `youtu.be/..?list=<id>`); reject non-YouTube URLs and missing/empty list ids.
 - Job flow: normalize URL → run `yt-dlp --flat-playlist --dump-single-json`
-  in the sandbox → parse entries → import with the CSV path's semantics:
+  in the sandbox → import in one pass:
   - Playlist id is deterministic: `yt-<listID>` with `external_id = <listID>`,
     so re-importing the same playlist refreshes it (idempotent).
-  - Title comes from the fetched playlist metadata (fallback: list id).
-  - Link videos already in the archive; enqueue metadata scans for missing
-    videos (default `ModeMetadataScan`, deduplicated per URL).
-  - Link the playlist to its channel only when that channel already exists in
-    the archive (do not create channels as a side effect).
+  - Title comes from the fetched playlist metadata (fallback: list id); the
+    fetched description is stored too.
+  - Catalog rows are hydrated from the flat dump for every entry (title,
+    duration, channel, thumbnail) and **all entries are linked into the
+    playlist immediately** — the playlist is complete on first import, with
+    no metadata-scan round trip. New rows are not channel-catalog members
+    (`catalog_position -1`), and existing rows keep their channel position so
+    playlist imports never reorder channel catalogs.
+  - The uploader channel row is created/refreshed (same as a channel scan)
+    and linked, so the playlist page shows the channel.
 - API: `POST /api/playlists/import-url` (auth-gated, bounded JSON body)
   returns `202` with the enqueued job (public job DTO), mirroring the channel
   scan endpoints. Invalid URLs return `400` and enqueue nothing.
@@ -50,23 +55,31 @@ like `channel_scan`, not a synchronous request.
   job; re-running later refreshes the same playlist instead of duplicating.
 - Posting a non-YouTube URL or a URL without a `list` parameter returns a
   clear `400` and enqueues nothing.
-- Missing videos get deduplicated metadata scans (same as the CSV path).
+- The playlist appears populated on first import: every entry gets a catalog
+  row from the flat dump and a playlist entry, so the detail page shows all
+  videos (titles/thumbnails) without waiting for scans or a re-import.
 - Covered by unit tests (URL normalization, command build, handler with a
-  fake runner, idempotent re-import) and a server handler test.
+  fake runner, idempotent re-import, catalog-position preservation) and a
+  server handler test.
 
 ## Notes
 
 - Import direction: `playlistimport` currently imports `download` for its
-  enqueue helpers. The `playlist_import` handler must live in `download`
+  enqueue helpers. The `playlist_import` handler lives in `download`
   (sandbox/yt-dlp access), so `playlistimport` inverts that edge: it defines a
   tiny `Enqueuer` interface (`EnqueuePlaylistVideo(ctx, videoID, mode)`) and
   the CSV/CLI/URL paths all hand it a `download.NewPlaylistImportEnqueuer`.
-  This keeps one source of truth for playlist linking.
-- The playlist import intentionally does not hydrate catalog rows from the
-  flat dump: `upsertCatalogVideo` would overwrite `catalog_position` for
-  videos that already belong to a channel catalog, reordering channel pages.
-  Missing videos go through the existing `video_metadata_scan` jobs instead,
-  exactly like the CSV path.
+  This keeps one source of truth for the CSV/CLI playlist linking.
+- The URL path deliberately does **not** reuse the CSV path's
+  link-existing-then-scan-missing flow. The flat dump already carries
+  browsable metadata (title/duration/channel/thumbnail) for every entry, so
+  the import hydrates catalog rows and links everything immediately — no
+  metadata scans, no "re-import to link" step. The CSV path keeps scans
+  because a CSV only has video ids.
+- Catalog position safety: playlist hydration writes catalog rows with
+  `catalog_position = -1` for new rows and **preserves** the existing
+  `catalog_position` on conflict (`upsertCatalogVideo(..., preservePosition
+  bool)`), so importing a playlist never reorders a channel catalog.
 - `BuildPlaylistImportCommand` reuses the channel-catalog flat-dump shape
   (`--flat-playlist --dump-single-json`) with the same 4 MiB stdout bound;
   flat entries are small, so this covers any realistic playlist.

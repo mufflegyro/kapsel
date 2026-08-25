@@ -132,3 +132,34 @@ Playlists page import form now also accepts a public YouTube playlist link.
   (202/400/auth); e2e smoke for the field (invalid link error, valid link
   enqueues) — 4 passed desktop+mobile. `go test ./...` green, `pnpm check` 0
   errors.
+
+## 2026-08-25 — Playlist URL import fix: populate the playlist on first import
+
+**Reported live:** importing `PLA-srqGetlqm88EpQgAlFpWxuLfGvI7T7` ("Smeatharpe
+Rave Days") created the playlist but added no videos; the last metadata scan
+looked stuck. Root cause: the first implementation mirrored the CSV path
+(link videos already in the archive, enqueue `video_metadata_scan` for the
+rest), so with 0 archived videos it linked 0 and deferred everything to
+scans — the playlist stayed empty until a re-import. The "stuck" job was a
+scan for `18W9WYw9HaA`, a video removed from YouTube for copyright; it was
+retrying (attempts 2/3), not hung.
+
+**Fix (committed, redeployed):** the URL import now hydrates catalog rows
+from the flat dump (title/duration/channel/thumbnail — same shape as channel
+scans) and links every entry immediately, so the playlist is complete on
+first import and no metadata scans are enqueued.
+
+- `upsertCatalogVideo` gained a `preservePosition` flag (catalog_position is
+  preserved on conflict for playlist imports, so channel catalogs are never
+  reordered; new playlist rows get `catalog_position -1`, i.e. not members of
+  any channel catalog).
+- Shared `writeCatalogVideo` helper (channel upsert + catalog row + search
+  docs) now used by both channel scans and playlist imports.
+- `playlistimport.UpsertPlaylist` exported and tx-friendly (playlist row +
+  title/description search docs) with an optional description; CSV/CLI
+  `ImportInto` unchanged.
+- Result semantics: `linked` = entries linked, `skipped` = entries with no
+  usable id (collapsed duplicates count as linked).
+- Tests: handler test now asserts all entries linked with no scan jobs,
+  uploader channel created, existing video keeps `catalog_position 7`, new
+  rows at -1. `go test ./...` green.

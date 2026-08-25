@@ -5006,16 +5006,18 @@ const playlistImportFixture = `{
   ]
 }`
 
-func TestHandlePlaylistImportLinksAndEnqueuesScans(t *testing.T) {
+func TestHandlePlaylistImportHydratesAndLinksAllEntries(t *testing.T) {
 	t.Parallel()
 
 	db := openDownloadDB(t)
 	store := jobs.NewStore(db)
+	// v1 already belongs to a channel catalog at position 7: importing a
+	// playlist must not reorder it. The uploader channel is deliberately not
+	// pre-seeded — the handler should create it from the flat dump.
 	if _, err := db.Exec(`
-INSERT INTO channels (id, external_id, name) VALUES ('UCfixtureChannelID1', 'UCfixtureChannelID1', 'Fixture Channel');
-INSERT INTO videos (id, source, external_id, title, duration_seconds)
-VALUES ('v1', 'youtube', 'CtCgNRquauE', 'Track One', 60),
-       ('v2', 'youtube', 'Arj1LYD4ano', 'Track Two', 60);`); err != nil {
+INSERT INTO videos (id, source, external_id, title, duration_seconds, catalog_position)
+VALUES ('CtCgNRquauE', 'youtube', 'CtCgNRquauE', 'Track One', 60, 7),
+       ('Arj1LYD4ano', 'youtube', 'Arj1LYD4ano', 'Track Two', 60, -1);`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -5049,8 +5051,9 @@ VALUES ('v1', 'youtube', 'CtCgNRquauE', 'Track One', 60),
 	if result.PlaylistID != "yt-PLfixtureListID1234567890" || result.Title != "DnB Mix 2026" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	// Duplicate entry collapses; two archived videos link, one stays missing.
-	if result.Linked != 2 || result.Missing != 1 || result.Enqueued != 1 || result.Skipped != 0 {
+	// The duplicate entry collapses: all three unique videos are linked in one
+	// pass, so nothing is missing and no metadata scans are enqueued.
+	if result.Linked != 3 || result.Missing != 0 || result.Enqueued != 0 || result.Skipped != 0 {
 		t.Fatalf("unexpected result counts: %#v", result)
 	}
 
@@ -5062,19 +5065,39 @@ VALUES ('v1', 'youtube', 'CtCgNRquauE', 'Track One', 60),
 	if title != "DnB Mix 2026" || channelID != "UCfixtureChannelID1" {
 		t.Fatalf("unexpected playlist row: title=%q channel=%q", title, channelID)
 	}
+	// The uploader channel row was created by the import.
+	var channelName string
+	if err := db.QueryRow("SELECT name FROM channels WHERE id = 'UCfixtureChannelID1'").Scan(&channelName); err != nil {
+		t.Fatal(err)
+	}
+	if channelName != "Fixture Channel" {
+		t.Fatalf("expected created channel name, got %q", channelName)
+	}
 	var entryCount int
 	if err := db.QueryRow("SELECT count(*) FROM playlist_entries WHERE playlist_id = 'yt-PLfixtureListID1234567890'").Scan(&entryCount); err != nil {
 		t.Fatal(err)
 	}
-	if entryCount != 2 {
-		t.Fatalf("expected 2 playlist entries, got %d", entryCount)
+	if entryCount != 3 {
+		t.Fatalf("expected 3 playlist entries, got %d", entryCount)
 	}
+	// The missing video became a catalog row from the flat dump (position -1,
+	// not a channel-catalog member) and the existing video kept its channel
+	// position: playlist imports must not reorder channel catalogs.
+	var newPosition int
+	if err := db.QueryRow("SELECT catalog_position FROM videos WHERE external_id = 'AAAAbbbbCCC'").Scan(&newPosition); err != nil {
+		t.Fatal(err)
+	}
+	if newPosition != -1 {
+		t.Fatalf("expected new catalog row at position -1, got %d", newPosition)
+	}
+	assertScalar(t, db, "SELECT catalog_position FROM videos WHERE id = 'CtCgNRquauE'", 7)
+	// No metadata scans: the flat dump already populated the catalog.
 	var jobCount int
 	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "video_metadata_scan").Scan(&jobCount); err != nil {
 		t.Fatal(err)
 	}
-	if jobCount != 1 {
-		t.Fatalf("expected 1 video metadata scan job, got %d", jobCount)
+	if jobCount != 0 {
+		t.Fatalf("expected no video metadata scan jobs, got %d", jobCount)
 	}
 }
 
