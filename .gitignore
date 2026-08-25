@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Browser cookies exported for yt-dlp authentication (credential-like)
+*.cookies.txt
+!deploy/**/kapsel.env.example
+
 # Go
 coverage.out
 bin/
