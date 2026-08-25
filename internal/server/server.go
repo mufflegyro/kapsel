@@ -42,9 +42,13 @@ const maxLoginPayloadBytes = 4 * 1024
 const maxDownloadPayloadBytes = 4 * 1024
 const maxChannelPayloadBytes = 4 * 1024
 const maxTubeArchivistImportPayloadBytes = 4 * 1024
+
 // maxPlaylistCSVUploadBytes bounds a playlist CSV upload (multipart). Playlist
 // exports are small, but leave headroom for large playlists.
 const maxPlaylistCSVUploadBytes = 8 * 1024 * 1024
+
+// maxPlaylistImportPayloadBytes bounds the JSON body of a playlist URL import.
+const maxPlaylistImportPayloadBytes = 4 * 1024
 const maxPlaybackProgressSeconds = 7 * 24 * 60 * 60
 const maxPlaybackProgressPayloadBytes = 1024
 const maxKeepForeverPayloadBytes = 1024
@@ -300,6 +304,7 @@ func NewHandler(options ...Option) http.Handler {
 			mux.HandleFunc("POST /api/channels/{id}/scan", requireAuth(config, createChannelScan(config.db, config.jobs)))
 			mux.HandleFunc("POST /api/videos/{id}/download", requireAuth(config, createCatalogVideoDownload(config.db, config.jobs, mediaURLs)))
 			mux.HandleFunc("POST /api/playlists/import", requireAuth(config, createPlaylistCSVImport(config.db, config.jobs)))
+			mux.HandleFunc("POST /api/playlists/import-url", requireAuth(config, createPlaylistURLImport(config.db, config.jobs)))
 		}
 		if config.importRoot != "" {
 			mux.HandleFunc("POST /api/imports/tubearchivist", requireAuth(config, createTubeArchivistImport(config.jobs, config.importRoot)))
@@ -1105,25 +1110,67 @@ func createPlaylistCSVImport(db *sql.DB, store *jobs.Store) http.HandlerFunc {
 
 		// Import using the original uploaded name so the deterministic playlist
 		// id/title match the CLI (idempotent per file name).
-		report, err := playlistimport.ImportEntries(r.Context(), db, store, name, entries, playlistimport.ModeMetadataScan)
+		report, err := playlistimport.ImportEntries(r.Context(), db, download.NewPlaylistImportEnqueuer(store), name, entries, playlistimport.ModeMetadataScan)
 		if err != nil {
 			http.Error(w, "playlist import failed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		response := playlistImportResponse{
-			Playlists:  report.Playlists,
-			Linked:     report.Linked,
-			Missing:    report.Missing,
-			Enqueued:   report.Enqueued,
-			Skipped:    report.Skipped,
-			Errors:     report.Errors,
+			Playlists: report.Playlists,
+			Linked:    report.Linked,
+			Missing:   report.Missing,
+			Enqueued:  report.Enqueued,
+			Skipped:   report.Skipped,
+			Errors:    report.Errors,
 		}
 		// Recompute the deterministic playlist id/title the importer used so
 		// the client can refresh/navigate without guessing.
-		response.PlaylistID, response.Title = playlistimport.PlaylistIdentity(name)
+		identity := playlistimport.PlaylistIdentityFromPath(name)
+		response.PlaylistID, response.Title = identity.ID, identity.Title
 
 		writeJSON(w, http.StatusOK, response)
+	}
+}
+
+// playlistURLImportRequest is the JSON body accepted by POST
+// /api/playlists/import-url.
+type playlistURLImportRequest struct {
+	URL string `json:"url"`
+}
+
+// createPlaylistURLImport accepts a YouTube playlist link and enqueues a
+// playlist_import job that fetches the playlist and imports it asynchronously
+// (the CSV upload is synchronous because parsing is local; fetching from
+// YouTube needs the sandboxed yt-dlp runner). It returns 202 with the enqueued
+// job so the UI can show progress.
+func createPlaylistURLImport(db *sql.DB, store *jobs.Store) http.HandlerFunc {
+	if db == nil || store == nil {
+		return func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "database or job store unavailable", http.StatusServiceUnavailable)
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxPlaylistImportPayloadBytes)
+		var request playlistURLImportRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "could not read playlist link (expected a JSON body with a url field)", http.StatusBadRequest)
+			return
+		}
+		if _, _, err := download.NormalizePlaylistURL(request.URL); err != nil {
+			http.Error(w, "invalid YouTube playlist link: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		job, err := download.EnqueuePlaylistImport(r.Context(), store, download.PlaylistImportPayload{URL: request.URL})
+		if err != nil {
+			http.Error(w, "failed to enqueue playlist import: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(publicJobResponse(job))
 	}
 }
 

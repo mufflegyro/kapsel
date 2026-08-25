@@ -68,6 +68,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		download.ChannelJobType:             downloader.HandleChannelFirst,
 		download.ChannelScanJobType:         downloader.HandleChannelScan,
 		download.ChannelAutoDownloadJobType: downloader.HandleChannelAutoDownload,
+		download.PlaylistImportJobType:      downloader.HandlePlaylistImport,
 		download.RetentionJobType:           downloader.HandleRetention,
 		download.YTDLPUpdateJobType:         downloader.HandleYTDLPUpdate,
 		previews.JobType:                    previewer.Handle,

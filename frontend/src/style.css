@@ -422,6 +422,25 @@ button:disabled {
   margin-top: 1.5rem;
 }
 
+.channel-dock .import-divider {
+  align-items: center;
+  color: var(--faint);
+  display: flex;
+  font-size: 0.75rem;
+  gap: 0.6rem;
+  grid-column: 1 / -1;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.channel-dock .import-divider::before,
+.channel-dock .import-divider::after {
+  background: var(--line);
+  content: '';
+  flex: 1;
+  height: 1px;
+}
+
 .download-form-grid {
   display: grid;
   gap: 1rem;

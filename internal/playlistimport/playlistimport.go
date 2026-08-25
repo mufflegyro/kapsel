@@ -15,8 +15,6 @@ import (
 	"strings"
 
 	"kapsel/internal/denorm"
-	"kapsel/internal/download"
-	"kapsel/internal/jobs"
 )
 
 // Entry is a single parsed playlist row.
@@ -131,11 +129,30 @@ type Report struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
+// Enqueuer handles a playlist video that is missing from the archive. The CSV
+// and CLI paths use the download helpers via download.NewPlaylistImportEnqueuer;
+// the URL-import job handler provides the same adapter. Defining the interface
+// here keeps the link logic in one place without a download import cycle.
+type Enqueuer interface {
+	EnqueuePlaylistVideo(ctx context.Context, videoID string, mode Mode) error
+}
+
+// PlaylistIdentity is the deterministic identity a playlist is upserted under:
+// a stable local id, the YouTube external id (list id for URL imports, the
+// title for CSV-derived playlists), the display title, and an optional channel
+// id that is linked only when that channel already exists in the archive.
+type PlaylistIdentity struct {
+	ID         string
+	ExternalID string
+	Title      string
+	ChannelID  string
+}
+
 // ImportFile parses the playlist export at path, creates or updates the
 // playlist named after the file base, and links every video already present
 // in the archive. Videos missing from the archive are handled according to
 // mode (see Mode). It returns a report.
-func ImportFile(ctx context.Context, db *sql.DB, store *jobs.Store, path string, mode Mode) (Report, error) {
+func ImportFile(ctx context.Context, db *sql.DB, enqueuer Enqueuer, path string, mode Mode) (Report, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Report{}, err
@@ -147,21 +164,34 @@ func ImportFile(ctx context.Context, db *sql.DB, store *jobs.Store, path string,
 		return Report{}, err
 	}
 
-	return ImportEntries(ctx, db, store, path, entries, mode)
+	return ImportEntries(ctx, db, enqueuer, path, entries, mode)
 }
 
 // ImportEntries links parsed entries into a playlist named after the file base
 // name of path. It is split from ImportFile so tests can drive it directly.
-func ImportEntries(ctx context.Context, db *sql.DB, store *jobs.Store, path string, entries []Entry, mode Mode) (Report, error) {
+func ImportEntries(ctx context.Context, db *sql.DB, enqueuer Enqueuer, path string, entries []Entry, mode Mode) (Report, error) {
+	identity := PlaylistIdentityFromPath(path)
+
+	return ImportInto(ctx, db, enqueuer, identity, entries, mode)
+}
+
+// ImportInto links entries into the playlist described by identity. It is the
+// shared core behind ImportEntries (CSV) and the playlist_import URL job: it
+// upserts the playlist, replaces its entries with the ones already in the
+// archive, and enqueues missing videos according to mode.
+func ImportInto(ctx context.Context, db *sql.DB, enqueuer Enqueuer, identity PlaylistIdentity, entries []Entry, mode Mode) (Report, error) {
 	if db == nil {
 		return Report{}, errors.New("playlist import missing database")
+	}
+	if enqueuer == nil {
+		return Report{}, errors.New("playlist import missing enqueuer")
 	}
 	if mode == "" {
 		mode = ModeMetadataScan
 	}
 	report := Report{Playlists: 1}
 
-	playlistID, err := upsertPlaylist(ctx, db, path)
+	playlistID, err := upsertPlaylist(ctx, db, identity)
 	if err != nil {
 		return Report{}, err
 	}
@@ -211,17 +241,9 @@ VALUES (?, ?, ?)`, playlistID, videoID, position); err != nil {
 
 	enqueued := 0
 	for _, videoID := range missing {
-		payload := download.Payload{URL: "https://www.youtube.com/watch?v=" + videoID}
-		if mode == ModeDownload {
-			if _, err := download.EnqueueDownload(ctx, store, payload); err != nil {
-				report.Errors = append(report.Errors, fmt.Sprintf("enqueue video %s: %v", videoID, err))
-				continue
-			}
-		} else {
-			if _, err := download.EnqueueVideoMetadataScan(ctx, store, payload); err != nil {
-				report.Errors = append(report.Errors, fmt.Sprintf("enqueue metadata scan %s: %v", videoID, err))
-				continue
-			}
+		if err := enqueuer.EnqueuePlaylistVideo(ctx, videoID, mode); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("enqueue video %s: %v", videoID, err))
+			continue
 		}
 		enqueued++
 	}
@@ -230,30 +252,60 @@ VALUES (?, ?, ?)`, playlistID, videoID, position); err != nil {
 	return report, nil
 }
 
-// PlaylistIdentity derives the deterministic playlist id and display title for
-// a playlist export file path. Both the CLI and the HTTP upload path use this
-// so that re-importing the same file name refreshes the same playlist.
-func PlaylistIdentity(path string) (playlistID, title string) {
+// PlaylistIdentityFromPath derives the deterministic playlist identity for a
+// playlist export file path. Both the CLI and the HTTP upload path use this so
+// that re-importing the same file name refreshes the same playlist.
+func PlaylistIdentityFromPath(path string) PlaylistIdentity {
 	base := filepath.Base(path)
-	title = strings.TrimSuffix(base, filepath.Ext(base))
+	title := strings.TrimSuffix(base, filepath.Ext(base))
 	if strings.TrimSpace(title) == "" {
 		title = base
 	}
-	return "csv-" + slugify(title), title
+
+	return PlaylistIdentity{
+		ID:         "csv-" + slugify(title),
+		ExternalID: title,
+		Title:      title,
+	}
 }
 
-// upsertPlaylist creates or refreshes the playlist for path, deriving a
-// deterministic id and the display title from the file base name. It returns
-// the playlist id.
-func upsertPlaylist(ctx context.Context, db *sql.DB, path string) (string, error) {
-	playlistID, title := PlaylistIdentity(path)
+// upsertPlaylist creates or refreshes the playlist described by identity. A
+// channel id is linked only when the channel already exists in the archive
+// (the playlist_entries foreign key would reject an unknown channel). It
+// returns the playlist id.
+func upsertPlaylist(ctx context.Context, db *sql.DB, identity PlaylistIdentity) (string, error) {
+	playlistID := identity.ID
+	if strings.TrimSpace(playlistID) == "" {
+		return "", errors.New("playlist import missing playlist id")
+	}
+	externalID := strings.TrimSpace(identity.ExternalID)
+	if externalID == "" {
+		externalID = playlistID
+	}
+	title := strings.TrimSpace(identity.Title)
+	if title == "" {
+		title = playlistID
+	}
+	channelID := sql.NullString{String: identity.ChannelID, Valid: strings.TrimSpace(identity.ChannelID) != ""}
+	if channelID.Valid {
+		var exists int
+		if err := db.QueryRowContext(ctx, "SELECT 1 FROM channels WHERE id = ?", channelID.String).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				channelID = sql.NullString{}
+			} else {
+				return "", err
+			}
+		}
+	}
 
 	_, err := db.ExecContext(ctx, `
-INSERT INTO playlists (id, external_id, title, updated_at)
-VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+INSERT INTO playlists (id, external_id, channel_id, title, updated_at)
+VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(id) DO UPDATE SET
+  external_id = excluded.external_id,
+  channel_id = excluded.channel_id,
   title = excluded.title,
-  updated_at = excluded.updated_at`, playlistID, title, title)
+  updated_at = excluded.updated_at`, playlistID, externalID, channelID, title)
 	if err != nil {
 		return "", err
 	}

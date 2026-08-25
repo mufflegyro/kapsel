@@ -96,6 +96,7 @@
   let videoJobTimer;
   let previewJobTimer;
   let scanJobTimer;
+  let playlistImportJobTimer;
   let mediaURLRefreshTimer;
   let jobsPollTimer;
   let jobErrorCopyTimer;
@@ -114,6 +115,7 @@
   let activePreviewJobID = '';
   let activeScanJobID = '';
   let activeScanChannelID = '';
+  let activePlaylistImportJobID = '';
   let homeArchiveState = 'unknown';
   let searchInput = new URLSearchParams(locationSearch).get('q') ?? '';
   let librarySort = videoSortFromSearch(locationSearch);
@@ -165,6 +167,8 @@
   let playlistUpload = { status: 'idle', error: '', report: null };
   let playlistCSVFiles = null;
   let playlistCSVInput;
+  let playlistURL = '';
+  let playlistImportJob = { status: 'idle', job: null, error: '' };
   let searchPage = { status: 'idle', query: '', results: [], error: '' };
   let commentsPage = { status: 'idle', videoID: '', comments: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let diagnostics = { status: 'idle', readiness: null, error: '' };
@@ -658,6 +662,42 @@
     }
   }
 
+  async function importPlaylistURL() {
+    const url = playlistURL.trim();
+    if (!url) return;
+    if (playlistImportJobTimer) clearTimeout(playlistImportJobTimer);
+    activePlaylistImportJobID = '';
+    playlistImportJob = { status: 'loading', job: null, error: '' };
+    try {
+      const job = await postJSON('/api/playlists/import-url', { url });
+      activePlaylistImportJobID = job.id;
+      playlistURL = '';
+      playlistImportJob = { status: 'queued', job, error: '' };
+      if (path === '/downloads') loadJobs({ page: 1, showLoading: false });
+      watchPlaylistImportJob(job.id);
+    } catch (error) {
+      activePlaylistImportJobID = '';
+      playlistImportJob = { status: 'error', job: null, error: error.message };
+    }
+  }
+
+  function playlistImportSummary(job) {
+    let result = null;
+    if (job?.result_summary) {
+      try {
+        result = JSON.parse(job.result_summary);
+      } catch {
+        result = null;
+      }
+    }
+    if (!result) return 'Playlist import finished.';
+    const title = result.title || 'playlist';
+    let summary = `Imported “${title}” — ${result.linked ?? 0} linked, ${result.missing ?? 0} missing`;
+    if (result.enqueued) summary += ` (${result.enqueued} metadata scan${result.enqueued === 1 ? '' : 's'} queued)`;
+    if (result.skipped) summary += `, ${result.skipped} skipped`;
+    return summary + '.';
+  }
+
   async function loadComments(id, options = {}) {
     const requestToken = ++commentsRequestToken;
     const isSameVideo = commentsPage.videoID === id;
@@ -1144,6 +1184,7 @@
     if (activeScanJobID && isChannelJobActive(scanJob.status)) ids.push(activeScanJobID);
     if (activeVideoJobID && isChannelJobActive(videoJob.status)) ids.push(activeVideoJobID);
     if (activePreviewJobID && isChannelJobActive(previewJob.status)) ids.push(activePreviewJobID);
+    if (activePlaylistImportJobID && isChannelJobActive(playlistImportJob.status)) ids.push(activePlaylistImportJobID);
     for (const state of Object.values(catalogVideoJobs)) {
       if (state?.job?.id && isChannelJobActive(state.status)) ids.push(state.job.id);
     }
@@ -1171,6 +1212,7 @@
     if (job.id === activeScanJobID) applyScanJobUpdate(job);
     if (job.id === activeVideoJobID) applyVideoJobUpdate(job);
     if (job.id === activePreviewJobID) applyPreviewJobUpdate(job);
+    if (job.id === activePlaylistImportJobID) applyPlaylistImportJobUpdate(job);
     const catalogEntry = Object.entries(catalogVideoJobs).find(([, state]) => state?.job?.id === job.id);
     if (catalogEntry) applyCatalogVideoJobUpdate(catalogEntry[0], job);
   }
@@ -1399,10 +1441,12 @@
     if (videoJobTimer) clearTimeout(videoJobTimer);
     if (previewJobTimer) clearTimeout(previewJobTimer);
     if (scanJobTimer) clearTimeout(scanJobTimer);
+    if (playlistImportJobTimer) clearTimeout(playlistImportJobTimer);
     channelJobTimer = undefined;
     videoJobTimer = undefined;
     previewJobTimer = undefined;
     scanJobTimer = undefined;
+    playlistImportJobTimer = undefined;
     clearCatalogVideoJobTimers();
   }
 
@@ -1412,6 +1456,7 @@
     if (activeScanJobID && isChannelJobActive(scanJob.status)) watchScanJob(activeScanJobID);
     if (activeVideoJobID && isChannelJobActive(videoJob.status)) watchVideoJob(activeVideoJobID);
     if (activePreviewJobID && isChannelJobActive(previewJob.status)) watchPreviewJob(activePreviewJobID);
+    if (activePlaylistImportJobID && isChannelJobActive(playlistImportJob.status)) watchPlaylistImportJob(activePlaylistImportJobID);
     for (const [itemID, state] of Object.entries(catalogVideoJobs)) {
       if (state?.job?.id && isChannelJobActive(state.status)) watchCatalogVideoJob(itemID, state.job.id);
     }
@@ -1471,6 +1516,39 @@
     if (job.status === 'failed' || job.status === 'cancelled') {
       activeScanJobID = '';
       activeScanChannelID = '';
+    }
+  }
+
+  function watchPlaylistImportJob(id) {
+    if (playlistImportJobTimer) clearTimeout(playlistImportJobTimer);
+    if (!id || liveConnected) return;
+    playlistImportJobTimer = setTimeout(() => pollPlaylistImportJob(id), 1500);
+  }
+
+  async function pollPlaylistImportJob(id) {
+    if (playlistImportJobTimer) clearTimeout(playlistImportJobTimer);
+    try {
+      const job = await fetchJSON(`/api/jobs/${encodeURIComponent(id)}`);
+      if (id !== activePlaylistImportJobID) return;
+      applyPlaylistImportJobUpdate(job);
+      if (id === activePlaylistImportJobID) watchPlaylistImportJob(id);
+    } catch (error) {
+      if (id !== activePlaylistImportJobID) return;
+      activePlaylistImportJobID = '';
+      playlistImportJob = { status: 'error', job: null, error: error.message };
+    }
+  }
+
+  function applyPlaylistImportJobUpdate(job) {
+    if (job.id !== activePlaylistImportJobID) return;
+    playlistImportJob = { status: job.status, job, error: job.error || '' };
+    if (job.status === 'succeeded') {
+      activePlaylistImportJobID = '';
+      loadPlaylists({ showLoading: false });
+      return;
+    }
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      activePlaylistImportJobID = '';
     }
   }
 
@@ -1671,6 +1749,7 @@
       previewJob = { status: 'idle', job: null, error: '' };
       catalogVideoJobs = {};
       scanJob = { status: 'idle', job: null, error: '' };
+      playlistImportJob = { status: 'idle', job: null, error: '' };
       channelSubscriptionAction = { status: 'idle', error: '' };
       channelSubscriptionOverride = { id: '', subscribed: null };
       activeChannelJobID = '';
@@ -1678,11 +1757,13 @@
       activePreviewJobID = '';
       activeScanJobID = '';
       activeScanChannelID = '';
+      activePlaylistImportJobID = '';
       jobAction = { id: '', action: '', error: '' };
       if (channelJobTimer) clearTimeout(channelJobTimer);
       if (videoJobTimer) clearTimeout(videoJobTimer);
       if (previewJobTimer) clearTimeout(previewJobTimer);
       if (scanJobTimer) clearTimeout(scanJobTimer);
+      if (playlistImportJobTimer) clearTimeout(playlistImportJobTimer);
       clearCatalogVideoJobTimers();
       stopJobsPolling();
       stopLiveUpdates();
@@ -1959,6 +2040,7 @@
     if (value === 'channel_scan') return 'Channel scan';
     if (value === 'channel_auto_download') return 'Channel auto-download';
     if (value === 'video_metadata_scan') return 'Video metadata scan';
+    if (value === 'playlist_import') return 'Playlist import';
     if (value === 'timeline_preview') return 'Timeline preview';
     if (value === 'ta_import') return 'TubeArchivist import';
     return String(value || 'job').replaceAll('_', ' ');
@@ -3176,6 +3258,18 @@
               {#if playlistUpload.status === 'loading'}Importing playlist...{:else if playlistUpload.status === 'succeeded'}
                 Imported “{playlistUpload.report?.title}” — {playlistUpload.report?.linked} linked, {playlistUpload.report?.missing} missing{playlistUpload.report?.enqueued ? ` (${playlistUpload.report.enqueued} metadata scan${playlistUpload.report.enqueued === 1 ? '' : 's'} queued)` : ''}.
               {:else if playlistUpload.status === 'error'}Playlist import failed: {playlistUpload.error}{/if}
+            </div>
+          {/if}
+
+          <div class="import-divider" aria-hidden="true"><span>or</span></div>
+
+          <div><strong>Import a YouTube playlist link</strong><span>Paste a playlist URL to enqueue a background job that fetches it from YouTube and imports it the same way.</span></div>
+          <label class="visually-hidden" for="playlist-url">YouTube playlist link</label>
+          <input id="playlist-url" type="url" placeholder="https://www.youtube.com/playlist?list=..." bind:value={playlistURL} onkeydown={event => { if (event.key === 'Enter') { event.preventDefault(); importPlaylistURL(); } }} />
+          <button type="button" onclick={importPlaylistURL} disabled={playlistURL.trim() === '' || isChannelJobActive(playlistImportJob.status)}>{playlistImportJob.status === 'loading' ? 'Enqueuing' : 'Import from link'}</button>
+          {#if playlistImportJob.status !== 'idle'}
+            <div role={playlistImportJob.status === 'failed' || playlistImportJob.status === 'error' ? 'alert' : 'status'} aria-live={playlistImportJob.status === 'failed' || playlistImportJob.status === 'error' ? 'assertive' : 'polite'} class:state-error={playlistImportJob.status === 'failed' || playlistImportJob.status === 'error'} class="job-state" data-testid="playlist-import-status">
+              {#if playlistImportJob.status === 'loading'}Enqueuing playlist import...{:else if playlistImportJob.status === 'queued'}Playlist import queued — waiting for a worker.{:else if playlistImportJob.status === 'running'}Importing playlist from YouTube...{:else if playlistImportJob.status === 'succeeded'}{playlistImportSummary(playlistImportJob.job)}{:else if playlistImportJob.status === 'failed' || playlistImportJob.status === 'error'}Playlist import failed: {playlistImportJob.error}{/if}
             </div>
           {/if}
         </form>

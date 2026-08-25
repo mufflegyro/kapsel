@@ -312,10 +312,13 @@ catalog from YouTube, like the post-incident rebuild did.
 it enqueues are processed by the server's job runner once it starts again).
 The default mode enqueues metadata-only scans — no media is downloaded.
 
-> **Web UI alternative:** the Playlists page has an upload control that
-> accepts a single playlist CSV (`POST /api/playlists/import`). It runs the
-> same import logic without needing to stop the server, so for one-off
-> uploads prefer the UI over the locked container flow below.
+> **Web UI alternative:** the Playlists page has an import form that accepts a
+> single playlist CSV (`POST /api/playlists/import`) or a public YouTube
+> playlist link (`POST /api/playlists/import-url`). The CSV upload runs the
+> same import logic without needing to stop the server; the link import
+> enqueues a `playlist_import` job that fetches the playlist from YouTube and
+> imports it the same way. For one-off imports prefer the UI over the locked
+> container flow below.
 
 1. Back up first (safe while the server runs, `VACUUM INTO`):
 

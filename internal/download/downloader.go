@@ -25,6 +25,7 @@ import (
 	"kapsel/internal/denorm"
 	"kapsel/internal/diskspace"
 	"kapsel/internal/jobs"
+	"kapsel/internal/playlistimport"
 	"kapsel/internal/previews"
 	"kapsel/internal/sandbox"
 )
@@ -38,6 +39,7 @@ const (
 	RetentionJobType                = "retention_cleanup"
 	YTDLPUpdateJobType              = "ytdlp_update"
 	VideoMetadataScanJobType        = "video_metadata_scan"
+	PlaylistImportJobType           = "playlist_import"
 	DownloadOriginManual            = "manual"
 	DownloadOriginChannelAuto       = "channel_auto"
 	MediaOriginImported             = "imported"
@@ -93,10 +95,11 @@ var ytdlpStdoutStatusPrefixes = []string{
 }
 
 var (
-	ErrDownloadURLRequired   = errors.New("download URL is required")
-	ErrUnsupportedURLScheme  = errors.New("download URL must use http or https")
-	ErrUnsupportedChannelURL = errors.New("channel URL must be a supported YouTube channel URL")
-	ErrUnsupportedVideoURL   = errors.New("download URL must be a supported single video URL")
+	ErrDownloadURLRequired    = errors.New("download URL is required")
+	ErrUnsupportedURLScheme   = errors.New("download URL must use http or https")
+	ErrUnsupportedChannelURL  = errors.New("channel URL must be a supported YouTube channel URL")
+	ErrUnsupportedVideoURL    = errors.New("download URL must be a supported single video URL")
+	ErrUnsupportedPlaylistURL = errors.New("playlist URL must be a YouTube playlist link with a list id")
 )
 
 type Config struct {
@@ -364,9 +367,9 @@ type Downloader struct {
 }
 
 type Payload struct {
-	URL       string `json:"url"`
-	Origin    string `json:"origin,omitempty"`
-	ScanOnly  bool   `json:"scan_only,omitempty"`
+	URL      string `json:"url"`
+	Origin   string `json:"origin,omitempty"`
+	ScanOnly bool   `json:"scan_only,omitempty"`
 }
 
 func NormalizeDownloadPayload(payload Payload) (Payload, error) {
@@ -599,6 +602,96 @@ func EnqueueChannelScan(ctx context.Context, store *jobs.Store, payload ChannelS
 	}
 	job, _, err := store.FindOrEnqueue(ctx, jobs.EnqueueParams{Type: ChannelScanJobType, PayloadJSON: string(payloadJSON)}, func(ctx context.Context, tx *sql.Tx) (jobs.Job, bool, error) {
 		return store.ActiveByPayloadTx(ctx, tx, ChannelScanJobType, string(payloadJSON))
+	})
+
+	return job, err
+}
+
+// PlaylistImportPayload is the payload for a playlist_import job: a YouTube
+// playlist URL whose entries are fetched and imported into the archive.
+type PlaylistImportPayload struct {
+	URL string `json:"url"`
+}
+
+// playlistImportResult is stored on a completed playlist_import job and mirrors
+// the CSV import report shape so the UI can summarize the outcome.
+type playlistImportResult struct {
+	PlaylistID string   `json:"playlist_id"`
+	Title      string   `json:"title"`
+	Linked     int      `json:"linked"`
+	Missing    int      `json:"missing"`
+	Enqueued   int      `json:"enqueued"`
+	Skipped    int      `json:"skipped"`
+	Errors     []string `json:"errors,omitempty"`
+}
+
+// NormalizePlaylistURL validates a YouTube playlist link and returns the
+// canonical playlist URL plus its list id. Accepted forms:
+//
+//	https://www.youtube.com/playlist?list=<id>
+//	https://www.youtube.com/watch?v=<video>&list=<id>
+//	https://youtu.be/<video>?list=<id>
+//
+// A list query parameter is required; non-YouTube hosts and empty/invalid
+// list ids are rejected.
+func NormalizePlaylistURL(rawURL string) (string, string, error) {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return "", "", ErrDownloadURLRequired
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", ErrUnsupportedURLScheme
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", "", ErrUnsupportedURLScheme
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !isYouTubeHost(host) && host != "youtu.be" {
+		return "", "", ErrUnsupportedPlaylistURL
+	}
+	listID := strings.TrimSpace(parsed.Query().Get("list"))
+	if !isLikelyYouTubeListID(listID) {
+		return "", "", ErrUnsupportedPlaylistURL
+	}
+	canonical := "https://www.youtube.com/playlist?list=" + url.QueryEscape(listID)
+
+	return canonical, listID, nil
+}
+
+func isLikelyYouTubeListID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+
+	return true
+}
+
+// EnqueuePlaylistImport enqueues a playlist_import job for a YouTube playlist
+// URL. The URL is normalized first, and an active job for the same playlist is
+// deduplicated so repeated submissions do not stack up.
+func EnqueuePlaylistImport(ctx context.Context, store *jobs.Store, payload PlaylistImportPayload) (jobs.Job, error) {
+	if store == nil {
+		return jobs.Job{}, errors.New("playlist import enqueue missing job store")
+	}
+	playlistURL, _, err := NormalizePlaylistURL(payload.URL)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	payload.URL = playlistURL
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	job, _, err := store.FindOrEnqueue(ctx, jobs.EnqueueParams{Type: PlaylistImportJobType, PayloadJSON: string(payloadJSON)}, func(ctx context.Context, tx *sql.Tx) (jobs.Job, bool, error) {
+		return store.ActiveByPayloadTx(ctx, tx, PlaylistImportJobType, string(payloadJSON))
 	})
 
 	return job, err
@@ -1233,6 +1326,28 @@ func (d *Downloader) BuildChannelCatalogPageCommand(rawURL string, start int, en
 	}, nil
 }
 
+// BuildPlaylistImportCommand builds a metadata-only yt-dlp flat dump for a
+// YouTube playlist URL. Flat entries carry the video ids (plus light metadata)
+// without downloading media, matching the channel-catalog scan shape; the same
+// bounded stdout cap applies since flat entries are small.
+func (d *Downloader) BuildPlaylistImportCommand(playlistURL string) (Command, error) {
+	mediaRoot, cookiesFile, err := d.ytdlpSandboxPaths()
+	if err != nil {
+		return Command{}, err
+	}
+	args := d.ytdlpArgs(cookiesFile, "--flat-playlist", "--dump-single-json", playlistURL)
+
+	return Command{
+		Name:           d.config.YTDLPPath,
+		Args:           args,
+		Dir:            mediaRoot,
+		Kind:           sandbox.KindYTDLP,
+		Access:         d.ytdlpAccess(mediaRoot, cookiesFile, false),
+		Network:        sandbox.NetworkAllow,
+		MaxStdoutBytes: maxChannelCatalogOutputBytes,
+	}, nil
+}
+
 func (d *Downloader) ytdlpSandboxPaths() (string, string, error) {
 	mediaRoot, err := commandPath(d.config.MediaRoot)
 	if err != nil {
@@ -1351,9 +1466,9 @@ func (d *Downloader) HandleYTDLPUpdate(ctx context.Context, job jobs.Job) error 
 
 // YTDLPUpdateResult reports the outcome of an automatic yt-dlp update run.
 type YTDLPUpdateResult struct {
-	Updated   bool   `json:"updated"`
-	Version   string `json:"version,omitempty"`
-	Skipped   bool   `json:"skipped,omitempty"`
+	Updated    bool   `json:"updated"`
+	Version    string `json:"version,omitempty"`
+	Skipped    bool   `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
 }
 
@@ -1667,6 +1782,127 @@ func (d *Downloader) HandleChannelScan(ctx context.Context, job jobs.Job) error 
 	}
 
 	return d.finishChannelJob(ctx, job.ID, result.ChannelID, false, result)
+}
+
+// HandlePlaylistImport runs a playlist_import job: it fetches a YouTube
+// playlist's flat entry list, then imports it with the same semantics as the
+// CSV path (upsert the playlist under its deterministic yt-<listID> id, link
+// videos already in the archive, enqueue metadata scans for missing ones).
+func (d *Downloader) HandlePlaylistImport(ctx context.Context, job jobs.Job) error {
+	if d.db == nil {
+		return errors.New("playlist import handler missing database")
+	}
+	store, err := d.jobStore()
+	if err != nil {
+		return err
+	}
+
+	var payload PlaylistImportPayload
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		return err
+	}
+	playlistURL, listID, err := NormalizePlaylistURL(payload.URL)
+	if err != nil {
+		return err
+	}
+	if err := d.ensureDiskSpace(); err != nil {
+		return err
+	}
+	command, err := d.BuildPlaylistImportCommand(playlistURL)
+	if err != nil {
+		return err
+	}
+	output, err := d.runYTDLP(ctx, command)
+	if err != nil {
+		return ytdlpJobError(command, output, err)
+	}
+	entries, title, channelID, err := parsePlaylistImportOutput(output, listID)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return errors.New("playlist contains no videos")
+	}
+
+	report, err := playlistimport.ImportInto(ctx, d.db, NewPlaylistImportEnqueuer(store), playlistimport.PlaylistIdentity{
+		ID:         "yt-" + listID,
+		ExternalID: listID,
+		Title:      title,
+		ChannelID:  channelID,
+	}, entries, playlistimport.ModeMetadataScan)
+	if err != nil {
+		return err
+	}
+
+	return d.setJobResult(ctx, job.ID, playlistImportResult{
+		PlaylistID: "yt-" + listID,
+		Title:      title,
+		Linked:     report.Linked,
+		Missing:    report.Missing,
+		Enqueued:   report.Enqueued,
+		Skipped:    report.Skipped,
+		Errors:     report.Errors,
+	})
+}
+
+// parsePlaylistImportOutput parses a yt-dlp flat playlist dump (--flat-playlist
+// --dump-single-json) into playlist entries, the playlist title, and the
+// uploader channel id. Entries without a usable video id are skipped and
+// duplicates are collapsed to their first occurrence so the playlist_entries
+// unique constraint cannot be tripped by a repeated video.
+func parsePlaylistImportOutput(output []byte, fallbackTitle string) ([]playlistimport.Entry, string, string, error) {
+	var metadata channelMetadata
+	if err := json.Unmarshal(output, &metadata); err != nil {
+		return nil, "", "", err
+	}
+	title := strings.TrimSpace(firstNonEmpty(metadata.Title, fallbackTitle))
+	if !isSafeMetadataValue(title) {
+		return nil, "", "", errors.New("playlist title contains unsafe text")
+	}
+	channelID := firstNonEmpty(metadata.ChannelID, metadata.UploaderID)
+
+	entries := []playlistimport.Entry{}
+	seen := map[string]struct{}{}
+	for _, entry := range metadata.Entries {
+		videoID := channelEntryVideoID(entry)
+		if videoID == "" {
+			continue
+		}
+		if _, ok := seen[videoID]; ok {
+			continue
+		}
+		seen[videoID] = struct{}{}
+		entries = append(entries, playlistimport.Entry{VideoID: videoID})
+	}
+
+	return entries, title, channelID, nil
+}
+
+// playlistEnqueuer adapts the job store to playlistimport.Enqueuer so the CSV,
+// CLI, and URL-import paths share one linking implementation.
+type playlistEnqueuer struct {
+	store *jobs.Store
+}
+
+// NewPlaylistImportEnqueuer returns a playlistimport.Enqueuer backed by the
+// download helpers (metadata scans for missing videos, full downloads in
+// ModeDownload).
+func NewPlaylistImportEnqueuer(store *jobs.Store) playlistimport.Enqueuer {
+	return playlistEnqueuer{store: store}
+}
+
+func (e playlistEnqueuer) EnqueuePlaylistVideo(ctx context.Context, videoID string, mode playlistimport.Mode) error {
+	if e.store == nil {
+		return errors.New("playlist import enqueue missing job store")
+	}
+	payload := Payload{URL: "https://www.youtube.com/watch?v=" + videoID}
+	if mode == playlistimport.ModeDownload {
+		_, err := EnqueueDownload(ctx, e.store, payload)
+		return err
+	}
+	_, err := EnqueueVideoMetadataScan(ctx, e.store, payload)
+
+	return err
 }
 
 func (d *Downloader) HandleChannelAutoDownload(ctx context.Context, job jobs.Job) error {

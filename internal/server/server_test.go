@@ -4545,6 +4545,100 @@ func TestPlaylistCSVImportUploadRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestPlaylistURLImportEnqueuesJob(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	store := jobs.NewStore(db)
+	manager := newServerAuthManager(t, time.Now())
+	body := strings.NewReader(`{"url":"https://www.youtube.com/playlist?list=PLtestListID1234567890"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/playlists/import-url", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(manager.SessionCookie("admin"))
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithDatabase(db), WithJobs(store), WithAuth(manager)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	var response jobResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Type != "playlist_import" || response.Status != jobs.StatusQueued {
+		t.Fatalf("unexpected job response: %#v", response)
+	}
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "playlist_import").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected 1 playlist_import job, got %d", jobCount)
+	}
+}
+
+func TestPlaylistURLImportRejectsInvalidLinks(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "non-YouTube host", body: `{"url":"https://example.com/playlist?list=PLx"}`},
+		{name: "missing list param", body: `{"url":"https://www.youtube.com/playlist"}`},
+		{name: "empty body", body: ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := openServerTestDB(t)
+			store := jobs.NewStore(db)
+			manager := newServerAuthManager(t, time.Now())
+			req := httptest.NewRequest(http.MethodPost, "/api/playlists/import-url", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(manager.SessionCookie("admin"))
+			rec := httptest.NewRecorder()
+
+			NewHandler(WithDatabase(db), WithJobs(store), WithAuth(manager)).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			var jobCount int
+			if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "playlist_import").Scan(&jobCount); err != nil {
+				t.Fatal(err)
+			}
+			if jobCount != 0 {
+				t.Fatalf("expected no playlist_import jobs enqueued, got %d", jobCount)
+			}
+		})
+	}
+}
+
+func TestPlaylistURLImportRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	store := jobs.NewStore(db)
+	req := httptest.NewRequest(http.MethodPost, "/api/playlists/import-url", strings.NewReader(`{"url":"https://www.youtube.com/playlist?list=PLtestListID1234567890"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithDatabase(db), WithJobs(store), WithAuth(newServerAuthManager(t, time.Now()))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "playlist_import").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected unauthenticated request not to enqueue, got %d", jobCount)
+	}
+}
+
 func TestGetPlaylistEndpointAndVideosOrderByPosition(t *testing.T) {
 	t.Parallel()
 

@@ -103,3 +103,32 @@ passed, 1 known failure**:
 test — uploads a per-run-unique CSV via `setInputFiles` on `#playlist-csv-file`,
 clicks Import playlist, asserts status ("1 linked, 1 missing") and that the
 playlist appears in the list. Passes desktop + mobile (~200-350ms each).
+
+## 2026-08-25 — Playlist import by URL (follow-up to CSV upload)
+
+**Added** the deferred follow-up from the playlist CSV upload issue: the
+Playlists page import form now also accepts a public YouTube playlist link.
+
+- New `playlist_import` background job (handled by the downloader, same
+  sandbox/cookies/retry path as `channel_scan`): validates the link
+  (`NormalizePlaylistURL`, requires a YouTube host + `list` param), runs
+  `yt-dlp --flat-playlist --dump-single-json`, and imports via the shared
+  `playlistimport.ImportInto` — upsert playlist under deterministic id
+  `yt-<listID>`, link videos already in the archive, enqueue deduplicated
+  metadata scans for missing ones, link the channel only when it already
+  exists in the archive.
+- `playlistimport` now defines a tiny `Enqueuer` interface instead of
+  importing `download` (which would have been a cycle once `download` hosts
+  the job handler); CSV/CLI/URL paths all use `download.NewPlaylistImportEnqueuer`.
+- API: `POST /api/playlists/import-url` (auth-gated, bounded JSON body) →
+  `202` + public job DTO; invalid links `400` without enqueuing.
+- UI: same import form on `/playlists` gained a URL text field + "Import from
+  link" button; status shows queued/running/succeeded (parses the job result
+  summary: linked/missing/scans queued) and the playlist list reloads on
+  success. Jobs page labels the type "Playlist import".
+- Tests: playlistimport identity + channel-linking coverage; download URL
+  normalization, command build, enqueue dedupe, handler with fake runner
+  (links/enqueues/idempotent, empty-playlist failure); server endpoint
+  (202/400/auth); e2e smoke for the field (invalid link error, valid link
+  enqueues) — 4 passed desktop+mobile. `go test ./...` green, `pnpm check` 0
+  errors.

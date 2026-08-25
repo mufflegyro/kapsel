@@ -1,4 +1,5 @@
 - [ ] [Upload a playlist CSV from the playlist page](issues/upload-playlist-csv-via-ui.md)
+- [ ] [Import a YouTube playlist by link from the playlist page](issues/import-playlist-by-url.md)
 - [ ] [Sandbox external media tools](issues/sandbox-external-media-tools.md)
 - [ ] [Add macOS sandbox-exec media tool sandbox](issues/add-macos-sandbox-exec-media-tool-sandbox.md)
 - [ ] [Add CSRF protection for state-changing APIs](issues/add-csrf-protection-for-state-changing-apis.md)

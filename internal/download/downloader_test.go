@@ -4882,3 +4882,237 @@ func TestDownloadHandlerRetriesNonMembersOnlyFailure(t *testing.T) {
 		t.Fatalf("expected non-members-only failure to queue for retry, got %#v", stored)
 	}
 }
+
+func TestNormalizePlaylistURL(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		wantURL string
+		wantID  string
+	}{
+		{name: "playlist path", raw: "https://www.youtube.com/playlist?list=PLtestListID1234567890", wantURL: "https://www.youtube.com/playlist?list=PLtestListID1234567890", wantID: "PLtestListID1234567890"},
+		{name: "watch with list", raw: "https://www.youtube.com/watch?v=CtCgNRquauE&list=RDMM&index=2", wantURL: "https://www.youtube.com/playlist?list=RDMM", wantID: "RDMM"},
+		{name: "youtu.be with list", raw: "https://youtu.be/CtCgNRquauE?list=PLabc", wantURL: "https://www.youtube.com/playlist?list=PLabc", wantID: "PLabc"},
+		{name: "whitespace trimmed", raw: "  https://www.youtube.com/playlist?list=PLabc  ", wantURL: "https://www.youtube.com/playlist?list=PLabc", wantID: "PLabc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			url, listID, err := NormalizePlaylistURL(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if url != tc.wantURL || listID != tc.wantID {
+				t.Fatalf("got url=%q id=%q, want url=%q id=%q", url, listID, tc.wantURL, tc.wantID)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "empty", raw: ""},
+		{name: "not a url", raw: "not a url"},
+		{name: "non-YouTube host", raw: "https://example.com/playlist?list=PLabc"},
+		{name: "missing list param", raw: "https://www.youtube.com/playlist"},
+		{name: "empty list param", raw: "https://www.youtube.com/playlist?list="},
+		{name: "invalid list chars", raw: "https://www.youtube.com/playlist?list=PL bad"},
+		{name: "ftp scheme", raw: "ftp://www.youtube.com/playlist?list=PLabc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := NormalizePlaylistURL(tc.raw); err == nil {
+				t.Fatalf("expected %q to be rejected", tc.raw)
+			}
+		})
+	}
+}
+
+func TestBuildPlaylistImportCommand(t *testing.T) {
+	t.Parallel()
+
+	downloader := NewDownloader(nil, Config{YTDLPPath: "yt-dlp", MediaRoot: "/archive/media", YTDLPCookiesFile: "/etc/kapsel/youtube.cookies.txt"}, nil)
+	command, err := downloader.BuildPlaylistImportCommand("https://www.youtube.com/playlist?list=PLtestListID1234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if command.Name != "yt-dlp" {
+		t.Fatalf("expected command name %q, got %q", "yt-dlp", command.Name)
+	}
+	if command.Dir != "/archive/media" {
+		t.Fatalf("expected working directory %q, got %q", "/archive/media", command.Dir)
+	}
+	for _, arg := range []string{"--ignore-config", "--cookies", "/etc/kapsel/youtube.cookies.txt", "--flat-playlist", "--dump-single-json", "https://www.youtube.com/playlist?list=PLtestListID1234567890"} {
+		if !slices.Contains(command.Args, arg) {
+			t.Fatalf("expected args to contain %q: %#v", arg, command.Args)
+		}
+	}
+	for _, forbidden := range []string{"--no-playlist", "--no-simulate", "--write-thumbnail", "--format"} {
+		if slices.Contains(command.Args, forbidden) {
+			t.Fatalf("expected args not to contain %q: %#v", forbidden, command.Args)
+		}
+	}
+	if command.MaxStdoutBytes != maxChannelCatalogOutputBytes {
+		t.Fatalf("expected stdout cap %d, got %d", maxChannelCatalogOutputBytes, command.MaxStdoutBytes)
+	}
+}
+
+func TestEnqueuePlaylistImportNormalizesAndDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+
+	first, err := EnqueuePlaylistImport(context.Background(), store, PlaylistImportPayload{URL: "https://www.youtube.com/watch?v=CtCgNRquauE&list=PLtestListID1234567890"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second enqueue of the same playlist (different URL spelling) must
+	// resolve to the same active job, not a duplicate.
+	second, err := EnqueuePlaylistImport(context.Background(), store, PlaylistImportPayload{URL: "https://www.youtube.com/playlist?list=PLtestListID1234567890"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected deduplicated job, got %q and %q", first.ID, second.ID)
+	}
+
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "playlist_import").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected 1 playlist_import job, got %d", jobCount)
+	}
+
+	if _, err := EnqueuePlaylistImport(context.Background(), store, PlaylistImportPayload{URL: "https://example.com/playlist?list=PLabc"}); err == nil {
+		t.Fatal("expected non-YouTube URL to be rejected")
+	}
+}
+
+const playlistImportFixture = `{
+  "id": "PLfixtureListID1234567890",
+  "title": "DnB Mix 2026",
+  "channel_id": "UCfixtureChannelID1",
+  "channel": "Fixture Channel",
+  "entries": [
+    {"id": "CtCgNRquauE", "title": "Track One"},
+    {"id": "Arj1LYD4ano", "title": "Track Two"},
+    {"id": "AAAAbbbbCCC", "title": "Track Three"},
+    {"id": "Arj1LYD4ano", "title": "Track Two (duplicate)"}
+  ]
+}`
+
+func TestHandlePlaylistImportLinksAndEnqueuesScans(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('UCfixtureChannelID1', 'UCfixtureChannelID1', 'Fixture Channel');
+INSERT INTO videos (id, source, external_id, title, duration_seconds)
+VALUES ('v1', 'youtube', 'CtCgNRquauE', 'Track One', 60),
+       ('v2', 'youtube', 'Arj1LYD4ano', 'Track Two', 60);`); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        PlaylistImportJobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/playlist?list=PLfixtureListID1234567890"}`,
+		MaxAttempts: 1,
+		RunAfter:    time.Now().Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		PlaylistImportJobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{stdout: []byte(playlistImportFixture)}).HandlePlaylistImport,
+	})
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusSucceeded {
+		t.Fatalf("expected succeeded job, got %#v", stored)
+	}
+	var result playlistImportResult
+	if err := json.Unmarshal([]byte(stored.ResultJSON), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.PlaylistID != "yt-PLfixtureListID1234567890" || result.Title != "DnB Mix 2026" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	// Duplicate entry collapses; two archived videos link, one stays missing.
+	if result.Linked != 2 || result.Missing != 1 || result.Enqueued != 1 || result.Skipped != 0 {
+		t.Fatalf("unexpected result counts: %#v", result)
+	}
+
+	var title string
+	var channelID string
+	if err := db.QueryRow("SELECT title, channel_id FROM playlists WHERE id = 'yt-PLfixtureListID1234567890'").Scan(&title, &channelID); err != nil {
+		t.Fatal(err)
+	}
+	if title != "DnB Mix 2026" || channelID != "UCfixtureChannelID1" {
+		t.Fatalf("unexpected playlist row: title=%q channel=%q", title, channelID)
+	}
+	var entryCount int
+	if err := db.QueryRow("SELECT count(*) FROM playlist_entries WHERE playlist_id = 'yt-PLfixtureListID1234567890'").Scan(&entryCount); err != nil {
+		t.Fatal(err)
+	}
+	if entryCount != 2 {
+		t.Fatalf("expected 2 playlist entries, got %d", entryCount)
+	}
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "video_metadata_scan").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected 1 video metadata scan job, got %d", jobCount)
+	}
+}
+
+func TestHandlePlaylistImportRejectsEmptyPlaylist(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        PlaylistImportJobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/playlist?list=PLfixtureEmpty0000"}`,
+		MaxAttempts: 1,
+		RunAfter:    time.Now().Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		PlaylistImportJobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{
+			stdout: []byte(`{"id": "PLfixtureEmpty0000", "title": "Empty", "entries": []}`),
+		}).HandlePlaylistImport,
+	})
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != jobs.StatusFailed || !strings.Contains(stored.Error, "contains no videos") {
+		t.Fatalf("expected failed empty-playlist job, got %#v", stored)
+	}
+	var playlistCount int
+	if err := db.QueryRow("SELECT count(*) FROM playlists").Scan(&playlistCount); err != nil {
+		t.Fatal(err)
+	}
+	if playlistCount != 0 {
+		t.Fatalf("expected no playlists created for empty playlist, got %d", playlistCount)
+	}
+}

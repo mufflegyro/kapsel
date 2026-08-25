@@ -22,6 +22,7 @@ import (
 	"kapsel/internal/config"
 	"kapsel/internal/database"
 	"kapsel/internal/diskspace"
+	"kapsel/internal/download"
 	"kapsel/internal/playlistimport"
 	"kapsel/internal/storage"
 	"kapsel/internal/subsimport"
@@ -315,7 +316,7 @@ func runImportPlaylists(ctx context.Context, cfg config.Config, args []string, s
 
 	total := playlistimport.Report{Playlists: 0}
 	for _, path := range filtered {
-		report, err := playlistimport.ImportFile(ctx, application.DB, application.Jobs, path, mode)
+		report, err := playlistimport.ImportFile(ctx, application.DB, download.NewPlaylistImportEnqueuer(application.Jobs), path, mode)
 		if err != nil {
 			fmt.Fprintf(stderr, "playlist import %q failed: %v\n", path, err)
 			return 1

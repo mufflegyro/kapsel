@@ -2052,6 +2052,28 @@ test('playlist CSV upload imports a playlist into the library', async ({ page })
   await expect(playlistLink).toContainText('1 video');
 });
 
+test('playlist URL import enqueues a background job and rejects invalid links', async ({ page }) => {
+  await page.goto('/playlists');
+  await expect(page.getByRole('heading', { name: 'Playlist library' })).toBeVisible();
+
+  const urlInput = page.getByLabel('YouTube playlist link');
+  const importButton = page.getByRole('button', { name: 'Import from link' });
+  await expect(urlInput).toBeVisible();
+  await expect(importButton).toBeDisabled();
+
+  // A non-YouTube link is rejected by the server before any job is enqueued.
+  await urlInput.fill('https://example.com/playlist?list=PLnope');
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+  await expect(page.getByTestId('playlist-import-status')).toContainText('Playlist import failed: invalid YouTube playlist link');
+
+  // A valid playlist link enqueues a playlist_import job and clears the field.
+  await urlInput.fill('https://www.youtube.com/playlist?list=PLtestListID1234567890');
+  await importButton.click();
+  await expect(page.getByTestId('playlist-import-status')).toContainText('queued');
+  await expect(urlInput).toHaveValue('');
+});
+
 async function audioEventCount(page, name) {
   return page.evaluate(eventName => (window.__kapselAudioEvents || []).filter(event => event.name === eventName).length, name);
 }
