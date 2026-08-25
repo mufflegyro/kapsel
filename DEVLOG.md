@@ -178,3 +178,13 @@ styling.
   playlist, opens it, confirms the dialog, asserts it leaves the list.
 - Tested live against the empty `csv-batocera-videos` playlist (204, row +
   search docs gone).
+
+## 2026-08-25 — Remove playlist button on the Playlist library list page
+
+Same button as the channel library: each playlist row in the library list now
+has a "Remove playlist" button (reusing the `.channel-row` / `.channel-list`
+layout), confirming before deleting. `deletePlaylist` now resolves the
+confirm-dialog name from the list row as well as the detail page. e2e:
+"playlist can be removed from the library list" — imports a CSV playlist,
+removes it from the row, asserts the "Playlist removed." status and that the
+row leaves the list.

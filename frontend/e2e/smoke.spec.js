@@ -2100,6 +2100,31 @@ test('playlist can be removed from its detail page', async ({ page }) => {
   await expect(page.getByRole('link', { name: new RegExp(playlistName) })).toHaveCount(0);
 });
 
+test('playlist can be removed from the library list', async ({ page }) => {
+  const playlistName = `E2E-Remove-List-${Date.now()}`;
+  await page.goto('/playlists');
+  await expect(page.getByRole('heading', { name: 'Playlist library' })).toBeVisible();
+
+  // Import a playlist to have something to remove.
+  await page.setInputFiles('#playlist-csv-file', {
+    name: `${playlistName}.csv`,
+    mimeType: 'text/csv',
+    buffer: Buffer.from('Video ID\nAAAAAAAAAAA\n'),
+  });
+  await page.getByRole('button', { name: 'Import playlist' }).click();
+  await expect(page.getByTestId('playlist-upload-status')).toContainText(`Imported “${playlistName}”`);
+
+  // The row has a Remove playlist button, like the channel library.
+  const playlistRow = page.getByRole('link', { name: new RegExp(playlistName) }).locator('xpath=..');
+  const removeButton = playlistRow.getByRole('button', { name: 'Remove playlist' });
+  await expect(removeButton).toBeVisible();
+
+  page.once('dialog', dialog => dialog.accept());
+  await removeButton.click();
+  await expect(page.getByTestId('playlist-remove-status')).toContainText('Playlist removed.');
+  await expect(page.getByRole('link', { name: new RegExp(playlistName) })).toHaveCount(0);
+});
+
 async function audioEventCount(page, name) {
   return page.evaluate(eventName => (window.__kapselAudioEvents || []).filter(event => event.name === eventName).length, name);
 }

@@ -1322,7 +1322,7 @@
 
   async function deletePlaylist(id) {
     if (playlistDeleteAction.status === 'loading') return;
-    const item = playlistPage.item;
+    const item = playlistPage.item || playlistListPage.playlists.find(p => p.id === id);
     const name = (item && item.title) || 'this playlist';
     const confirmed = window.confirm(`Remove "${name}" from the playlist library?\n\nThe playlist and its entries are removed. Archived videos are kept.`);
     if (!confirmed) return;
@@ -3314,16 +3314,20 @@
         {:else if playlistListPage.playlists.length === 0}
           <div class="state compact"><strong>No playlists yet.</strong><span>Imported playlists will appear here.</span></div>
         {:else}
-          <div class="result-list">
+          {#if playlistDeleteAction.status === 'error'}<div role="alert" class="job-state compact state-error">Could not remove playlist: {playlistDeleteAction.error}</div>{:else if playlistDeleteAction.status === 'succeeded'}<div role="status" aria-live="polite" class="job-state compact" data-testid="playlist-remove-status">Playlist removed.</div>{/if}
+          <div class="result-list channel-list">
             {#each playlistListPage.playlists as playlist (playlist.id)}
-              <a href={playlistHref(playlist)} onclick={event => navigate(event, playlistHref(playlist))}>
-                <span class="result-thumb" aria-hidden="true">P</span>
-                <div class="result-copy">
-                  <span>{formatVideoCount(playlist.video_count)}{playlist.subscribed ? ' · Subscribed' : ''}{playlist.channel?.name ? ` · ${playlist.channel.name}` : ''}</span>
-                  <strong>{playlist.title}</strong>
-                  <p>{playlist.description || 'No playlist description has been imported yet.'}</p>
-                </div>
-              </a>
+              <div class="channel-row">
+                <a href={playlistHref(playlist)} onclick={event => navigate(event, playlistHref(playlist))}>
+                  <span class="result-thumb" aria-hidden="true">P</span>
+                  <div class="result-copy">
+                    <span>{formatVideoCount(playlist.video_count)}{playlist.subscribed ? ' · Subscribed' : ''}{playlist.channel?.name ? ` · ${playlist.channel.name}` : ''}</span>
+                    <strong>{playlist.title}</strong>
+                    <p>{playlist.description || 'No playlist description has been imported yet.'}</p>
+                  </div>
+                </a>
+                <button type="button" class="channel-remove" onclick={() => deletePlaylist(playlist.id)} disabled={playlistDeleteAction.status === 'loading'}>{playlistDeleteAction.status === 'loading' ? 'Removing...' : 'Remove playlist'}</button>
+              </div>
             {/each}
           </div>
           <PaginationControls label="Playlist list pagination" page={playlistListPage.pagination.page} last={lastPage(playlistListPage.pagination)} onPageChange={changePlaylistsPage} />
