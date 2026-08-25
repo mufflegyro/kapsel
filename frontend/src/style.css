@@ -454,6 +454,12 @@ button:disabled {
   padding: 0.75rem 1rem;
 }
 
+.channel-dock input[type='file'] {
+  border-radius: 999px;
+  cursor: pointer;
+  padding: 0.55rem 1rem;
+}
+
 .channel-dock button {
   background: var(--accent);
   border: 0;

@@ -230,16 +230,23 @@ VALUES (?, ?, ?)`, playlistID, videoID, position); err != nil {
 	return report, nil
 }
 
+// PlaylistIdentity derives the deterministic playlist id and display title for
+// a playlist export file path. Both the CLI and the HTTP upload path use this
+// so that re-importing the same file name refreshes the same playlist.
+func PlaylistIdentity(path string) (playlistID, title string) {
+	base := filepath.Base(path)
+	title = strings.TrimSuffix(base, filepath.Ext(base))
+	if strings.TrimSpace(title) == "" {
+		title = base
+	}
+	return "csv-" + slugify(title), title
+}
+
 // upsertPlaylist creates or refreshes the playlist for path, deriving a
 // deterministic id and the display title from the file base name. It returns
 // the playlist id.
 func upsertPlaylist(ctx context.Context, db *sql.DB, path string) (string, error) {
-	base := filepath.Base(path)
-	title := strings.TrimSuffix(base, filepath.Ext(base))
-	if strings.TrimSpace(title) == "" {
-		title = base
-	}
-	playlistID := "csv-" + slugify(title)
+	playlistID, title := PlaylistIdentity(path)
 
 	_, err := db.ExecContext(ctx, `
 INSERT INTO playlists (id, external_id, title, updated_at)

@@ -28,6 +28,7 @@ import (
 	"kapsel/internal/download"
 	"kapsel/internal/jobs"
 	"kapsel/internal/media"
+	"kapsel/internal/playlistimport"
 	"kapsel/internal/previews"
 	"kapsel/internal/search"
 	"kapsel/internal/sponsorblock"
@@ -41,6 +42,9 @@ const maxLoginPayloadBytes = 4 * 1024
 const maxDownloadPayloadBytes = 4 * 1024
 const maxChannelPayloadBytes = 4 * 1024
 const maxTubeArchivistImportPayloadBytes = 4 * 1024
+// maxPlaylistCSVUploadBytes bounds a playlist CSV upload (multipart). Playlist
+// exports are small, but leave headroom for large playlists.
+const maxPlaylistCSVUploadBytes = 8 * 1024 * 1024
 const maxPlaybackProgressSeconds = 7 * 24 * 60 * 60
 const maxPlaybackProgressPayloadBytes = 1024
 const maxKeepForeverPayloadBytes = 1024
@@ -295,6 +299,7 @@ func NewHandler(options ...Option) http.Handler {
 		if config.db != nil {
 			mux.HandleFunc("POST /api/channels/{id}/scan", requireAuth(config, createChannelScan(config.db, config.jobs)))
 			mux.HandleFunc("POST /api/videos/{id}/download", requireAuth(config, createCatalogVideoDownload(config.db, config.jobs, mediaURLs)))
+			mux.HandleFunc("POST /api/playlists/import", requireAuth(config, createPlaylistCSVImport(config.db, config.jobs)))
 		}
 		if config.importRoot != "" {
 			mux.HandleFunc("POST /api/imports/tubearchivist", requireAuth(config, createTubeArchivistImport(config.jobs, config.importRoot)))
@@ -1026,6 +1031,99 @@ func createTubeArchivistImport(store *jobs.Store, importRoot string) http.Handle
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(publicJobResponse(job))
+	}
+}
+
+// playlistImportResponse is the JSON returned by a successful CSV upload.
+// playlist_id and title mirror the CLI report so the UI can confirm/refresh.
+type playlistImportResponse struct {
+	Playlists  int      `json:"playlists"`
+	Linked     int      `json:"linked"`
+	Missing    int      `json:"missing"`
+	Enqueued   int      `json:"enqueued"`
+	Skipped    int      `json:"skipped"`
+	Errors     []string `json:"errors,omitempty"`
+	PlaylistID string   `json:"playlist_id"`
+	Title      string   `json:"title"`
+}
+
+// createPlaylistCSVImport accepts a single playlist CSV uploaded as
+// multipart/form-data and imports it via playlistimport. The playlist title
+// and deterministic id are derived from the original uploaded file name so
+// re-uploading the same name refreshes that playlist (idempotent, matching
+// the CLI's kapsel import-playlists behavior). Missing videos get metadata
+// scans so a later re-upload can link them.
+func createPlaylistCSVImport(db *sql.DB, store *jobs.Store) http.HandlerFunc {
+	if db == nil || store == nil {
+		return func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "database or job store unavailable", http.StatusServiceUnavailable)
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxPlaylistCSVUploadBytes)
+		if err := r.ParseMultipartForm(maxPlaylistCSVUploadBytes); err != nil {
+			http.Error(w, "could not read playlist upload (expected multipart/form-data with a file field)", http.StatusBadRequest)
+			return
+		}
+		defer func() {
+			_ = r.MultipartForm.RemoveAll()
+		}()
+
+		filePart, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing playlist CSV file (field \"file\")", http.StatusBadRequest)
+			return
+		}
+		defer filePart.Close()
+
+		if header == nil || header.Size == 0 {
+			http.Error(w, "playlist CSV is empty", http.StatusBadRequest)
+			return
+		}
+		if header.Size > maxPlaylistCSVUploadBytes {
+			http.Error(w, "playlist CSV is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		// Preserve the original file name so the playlist title matches what
+		// the CLI derives from the file base name (DnB-videos.csv → "DnB-videos")
+		// and re-uploading the same name refreshes the same playlist.
+		name := filepath.Base(header.Filename)
+		if strings.TrimSpace(name) == "" {
+			name = "playlist.csv"
+		}
+
+		entries, err := playlistimport.Parse(filePart)
+		if err != nil {
+			http.Error(w, "invalid playlist CSV: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(entries) == 0 {
+			http.Error(w, "playlist CSV contains no valid video IDs", http.StatusBadRequest)
+			return
+		}
+
+		// Import using the original uploaded name so the deterministic playlist
+		// id/title match the CLI (idempotent per file name).
+		report, err := playlistimport.ImportEntries(r.Context(), db, store, name, entries, playlistimport.ModeMetadataScan)
+		if err != nil {
+			http.Error(w, "playlist import failed: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		response := playlistImportResponse{
+			Playlists:  report.Playlists,
+			Linked:     report.Linked,
+			Missing:    report.Missing,
+			Enqueued:   report.Enqueued,
+			Skipped:    report.Skipped,
+			Errors:     report.Errors,
+		}
+		// Recompute the deterministic playlist id/title the importer used so
+		// the client can refresh/navigate without guessing.
+		response.PlaylistID, response.Title = playlistimport.PlaylistIdentity(name)
+
+		writeJSON(w, http.StatusOK, response)
 	}
 }
 

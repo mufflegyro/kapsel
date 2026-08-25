@@ -162,6 +162,9 @@
   let channelListPage = { status: 'idle', channels: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
   let playlistListPage = { status: 'idle', playlists: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
   let playlistPage = { status: 'idle', item: null, videos: [], pagination: { page: 1, page_size: 50, total: 0 }, error: '' };
+  let playlistUpload = { status: 'idle', error: '', report: null };
+  let playlistCSVFiles = null;
+  let playlistCSVInput;
   let searchPage = { status: 'idle', query: '', results: [], error: '' };
   let commentsPage = { status: 'idle', videoID: '', comments: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let diagnostics = { status: 'idle', readiness: null, error: '' };
@@ -625,6 +628,33 @@
     } catch (error) {
       if (requestToken !== playlistRequestToken) return;
       playlistPage = { ...playlistPage, status: 'error', item: null, videos: [], error: error.message };
+    }
+  }
+
+  async function uploadPlaylistCSV() {
+    const file = playlistCSVFiles?.[0];
+    if (!file) return;
+    playlistUpload = { status: 'loading', error: '', report: null };
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch('/api/playlists/import', { method: 'POST', headers: { Accept: 'application/json' }, body: formData });
+      if (!response.ok) {
+        if (response.status === 401) {
+          session = { ...session, status: 'loaded', authenticated: false, login_required: true, error: '' };
+          stopLiveUpdates();
+        }
+        throw new Error(await responseErrorMessage(response));
+      }
+      const report = await response.json();
+      playlistUpload = { status: 'succeeded', error: '', report };
+      playlistCSVFiles = null;
+      if (playlistCSVInput) playlistCSVInput.value = '';
+      loadPlaylists({ showLoading: false });
+    } catch (error) {
+      playlistUpload = { status: 'error', error: error.message, report: null };
+      playlistCSVFiles = null;
+      if (playlistCSVInput) playlistCSVInput.value = '';
     }
   }
 
@@ -3135,6 +3165,21 @@
         <p>Playlists</p>
         <h1>Playlist library</h1>
         <span>Browse imported playlists and their bounded video pages.</span>
+
+        <form class="channel-dock large" onsubmit={event => { event.preventDefault(); uploadPlaylistCSV(); }}>
+          <div><strong>Import a playlist CSV</strong><span>Upload a per-playlist export with a Video ID column. Videos already in the archive are linked; missing ones get a metadata scan so a re-import can link them.</span></div>
+          <label class="visually-hidden" for="playlist-csv-file">Playlist CSV file</label>
+          <input id="playlist-csv-file" type="file" accept=".csv,text/csv" bind:this={playlistCSVInput} bind:files={playlistCSVFiles} />
+          <button type="submit" disabled={playlistUpload.status === 'loading' || !playlistCSVFiles?.length}>{playlistUpload.status === 'loading' ? 'Importing' : 'Import playlist'}</button>
+          {#if playlistUpload.status !== 'idle'}
+            <div role="status" aria-live="polite" class:state-error={playlistUpload.status === 'error'} class="job-state" data-testid="playlist-upload-status">
+              {#if playlistUpload.status === 'loading'}Importing playlist...{:else if playlistUpload.status === 'succeeded'}
+                Imported “{playlistUpload.report?.title}” — {playlistUpload.report?.linked} linked, {playlistUpload.report?.missing} missing{playlistUpload.report?.enqueued ? ` (${playlistUpload.report.enqueued} metadata scan${playlistUpload.report.enqueued === 1 ? '' : 's'} queued)` : ''}.
+              {:else if playlistUpload.status === 'error'}Playlist import failed: {playlistUpload.error}{/if}
+            </div>
+          {/if}
+        </form>
+
         {#if playlistListPage.status === 'loading'}
           <div class="state compact">Loading playlists...</div>
         {:else if playlistListPage.status === 'error'}

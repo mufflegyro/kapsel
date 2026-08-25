@@ -2,12 +2,14 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -4387,6 +4389,162 @@ func TestListPlaylistsEndpointPaginates(t *testing.T) {
 	}
 }
 
+func TestPlaylistCSVImportUploadCreatesPlaylist(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	store := jobs.NewStore(db)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('chan-1', 'chan-1', 'Channel');
+INSERT INTO videos (id, source, external_id, channel_id, title, duration_seconds)
+VALUES ('v1', 'youtube', 'CtCgNRquauE', 'chan-1', 'Video One', 60),
+       ('v2', 'youtube', 'Arj1LYD4ano', 'chan-1', 'Video Two', 60);`); err != nil {
+		t.Fatal(err)
+	}
+
+	body, contentType := newMultipartPlaylistBody(t, "DnB-videos.csv", "Video ID\nCtCgNRquauE\nArj1LYD4ano\nAAAAbbbbCCC\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/playlists/import", body)
+	req.Header.Set("Content-Type", contentType)
+	manager := newServerAuthManager(t, time.Now())
+	req.AddCookie(manager.SessionCookie("admin"))
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithDatabase(db), WithJobs(store), WithAuth(manager)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var response playlistImportResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Playlists != 1 || response.Linked != 2 || response.Missing != 1 || response.Enqueued != 1 {
+		t.Fatalf("unexpected import response: %#v", response)
+	}
+	if response.PlaylistID != "csv-dnb-videos" || response.Title != "DnB-videos" {
+		t.Fatalf("unexpected playlist identity: id=%q title=%q", response.PlaylistID, response.Title)
+	}
+
+	var title string
+	if err := db.QueryRow("SELECT title FROM playlists WHERE id = ?", response.PlaylistID).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if title != "DnB-videos" {
+		t.Fatalf("expected playlist title DnB-videos, got %q", title)
+	}
+	var jobCount int
+	if err := db.QueryRow("SELECT count(*) FROM jobs WHERE type = ?", "video_metadata_scan").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected 1 metadata scan job, got %d", jobCount)
+	}
+}
+
+func TestPlaylistCSVImportUploadIsIdempotentPerFileName(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	store := jobs.NewStore(db)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('chan-1', 'chan-1', 'Channel');
+INSERT INTO videos (id, source, external_id, channel_id, title, duration_seconds)
+VALUES ('v1', 'youtube', 'CtCgNRquauE', 'chan-1', 'Video One', 60),
+       ('v2', 'youtube', 'Arj1LYD4ano', 'chan-1', 'Video Two', 60);`); err != nil {
+		t.Fatal(err)
+	}
+	manager := newServerAuthManager(t, time.Now())
+
+	importCSV := func(csv string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, contentType := newMultipartPlaylistBody(t, "whitelist.csv", csv)
+		req := httptest.NewRequest(http.MethodPost, "/api/playlists/import", body)
+		req.Header.Set("Content-Type", contentType)
+		req.AddCookie(manager.SessionCookie("admin"))
+		rec := httptest.NewRecorder()
+		NewHandler(WithDatabase(db), WithJobs(store), WithAuth(manager)).ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := importCSV("Video ID\nCtCgNRquauE\nArj1LYD4ano\n"); rec.Code != http.StatusOK {
+		t.Fatalf("expected first import status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if rec := importCSV("Video ID\nArj1LYD4ano\n"); rec.Code != http.StatusOK {
+		t.Fatalf("expected second import status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM playlist_entries WHERE playlist_id = 'csv-whitelist'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 entry after re-upload, got %d", count)
+	}
+}
+
+func TestPlaylistCSVImportUploadRejectsInvalidUploads(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		filename   string
+		content    string
+		wantStatus int
+	}{
+		{name: "missing column", filename: "bad.csv", content: "Playlist Title\nMy playlist\n", wantStatus: http.StatusBadRequest},
+		{name: "empty file", filename: "empty.csv", content: "", wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openServerTestDB(t)
+			store := jobs.NewStore(db)
+			manager := newServerAuthManager(t, time.Now())
+			body, contentType := newMultipartPlaylistBody(t, tc.filename, tc.content)
+			req := httptest.NewRequest(http.MethodPost, "/api/playlists/import", body)
+			req.Header.Set("Content-Type", contentType)
+			req.AddCookie(manager.SessionCookie("admin"))
+			rec := httptest.NewRecorder()
+
+			NewHandler(WithDatabase(db), WithJobs(store), WithAuth(manager)).ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			var playlists int
+			if err := db.QueryRow("SELECT count(*) FROM playlists").Scan(&playlists); err != nil {
+				t.Fatal(err)
+			}
+			if playlists != 0 {
+				t.Fatalf("expected no playlists created, got %d", playlists)
+			}
+		})
+	}
+}
+
+func TestPlaylistCSVImportUploadRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	store := jobs.NewStore(db)
+	body, contentType := newMultipartPlaylistBody(t, "DnB-videos.csv", "Video ID\nCtCgNRquauE\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/playlists/import", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithDatabase(db), WithJobs(store), WithAuth(newServerAuthManager(t, time.Now()))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+	var playlists int
+	if err := db.QueryRow("SELECT count(*) FROM playlists").Scan(&playlists); err != nil {
+		t.Fatal(err)
+	}
+	if playlists != 0 {
+		t.Fatalf("expected unauthenticated upload not to create playlists, got %d", playlists)
+	}
+}
+
 func TestGetPlaylistEndpointAndVideosOrderByPosition(t *testing.T) {
 	t.Parallel()
 
@@ -4629,6 +4787,27 @@ func openServerTestDB(t *testing.T) *sql.DB {
 	return openServerTestDBAt(t, filepath.Join(t.TempDir(), "kapsel.db"))
 }
 
+// newMultipartPlaylistBody builds a multipart/form-data body with one file
+// field named "file" containing content under the given file name. It returns
+// the request body and its Content-Type header value.
+func newMultipartPlaylistBody(t *testing.T, filename string, content string) (*bytes.Buffer, string) {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return &body, writer.FormDataContentType()
+}
 func openServerTestDBAt(t *testing.T, path string) *sql.DB {
 	t.Helper()
 

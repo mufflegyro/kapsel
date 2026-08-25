@@ -76,6 +76,23 @@ func TestParseRequiresVideoIDColumn(t *testing.T) {
 	}
 }
 
+func TestPlaylistIdentityDerivesStableIDAndTitle(t *testing.T) {
+	t.Parallel()
+
+	id, title := PlaylistIdentity("/some/dir/DnB-videos.csv")
+	if id != "csv-dnb-videos" || title != "DnB-videos" {
+		t.Fatalf("unexpected identity: id=%q title=%q", id, title)
+	}
+	id2, title2 := PlaylistIdentity("/some/dir/My  Cool! Playlist.CSV")
+	if id2 != "csv-my-cool-playlist" || title2 != "My  Cool! Playlist" {
+		t.Fatalf("unexpected identity: id=%q title=%q", id2, title2)
+	}
+	id3, title3 := PlaylistIdentity("/some/dir/.hidden")
+	if id3 != "csv-hidden" || title3 != ".hidden" {
+		t.Fatalf("unexpected identity: id=%q title=%q", id3, title3)
+	}
+}
+
 func TestImportLinksExistingVideos(t *testing.T) {
 	t.Parallel()
 

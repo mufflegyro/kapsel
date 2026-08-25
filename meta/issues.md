@@ -1,3 +1,4 @@
+- [ ] [Upload a playlist CSV from the playlist page](issues/upload-playlist-csv-via-ui.md)
 - [ ] [Sandbox external media tools](issues/sandbox-external-media-tools.md)
 - [ ] [Add macOS sandbox-exec media tool sandbox](issues/add-macos-sandbox-exec-media-tool-sandbox.md)
 - [ ] [Add CSRF protection for state-changing APIs](issues/add-csrf-protection-for-state-changing-apis.md)
@@ -16,3 +17,4 @@
 - [x] [Hide members-only videos from all views](issues/hide-members-only-videos.md)
 - [x] [Import playlists from CSV exports](issues/import-playlists-from-csv.md)
 - [ ] [Add metadata-only scan mode to import-playlists](issues/playlist-import-metadata-scan.md)
+- [ ] [Native tvOS client app](issues/native-tvos-client-app.md)
