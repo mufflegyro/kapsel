@@ -237,6 +237,73 @@ button:disabled {
   color: var(--accent);
 }
 
+.quick-queue {
+  position: relative;
+}
+
+.quick-queue-panel {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  box-shadow: 0 1.2rem 2.4rem rgba(0, 0, 0, 0.45);
+  padding: 0.75rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.6rem);
+  width: 21rem;
+  z-index: 30;
+}
+
+.quick-queue-form {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.quick-queue-form input {
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  min-width: 0;
+  padding: 0.55rem 0.9rem;
+}
+
+.quick-queue-form button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #1d1306;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.55rem 0.9rem;
+  white-space: nowrap;
+}
+
+.quick-queue-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.quick-queue-status {
+  font-size: 0.82rem;
+  margin-top: 0.55rem;
+}
+
+.quick-queue-link {
+  color: var(--muted);
+  display: inline-block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  margin-top: 0.6rem;
+  text-decoration: none;
+}
+
+.quick-queue-link:hover,
+.quick-queue-link:focus-visible {
+  color: var(--accent);
+}
+
 .round-action,
 .more-button {
   background: var(--chip);

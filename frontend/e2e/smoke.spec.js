@@ -287,7 +287,7 @@ test('critical archive flows render without network downloads', async ({ page })
   await page.goto('/');
 
   const topActions = page.locator('.top-actions');
-  await expect(topActions.getByRole('link', { name: 'Open queue' })).toHaveAttribute('href', '/downloads');
+  await expect(topActions.getByRole('button', { name: 'Queue a video' })).toHaveAttribute('aria-expanded', 'false');
   await expect(topActions.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings');
   await expect(page.getByTestId('library-route')).toBeVisible();
   await expect(page.getByLabel('Sort by')).toHaveValue('watching');
@@ -475,7 +475,7 @@ test('critical archive flows render without network downloads', async ({ page })
   expect(legacyRouteVideoListRequests).toBe(0);
 
   await page.goto('/');
-  await topActions.getByRole('link', { name: 'Open queue' }).click();
+  await page.getByRole('link', { name: 'Downloads' }).click();
   await expect(page.getByLabel('Durable jobs')).toBeVisible();
   await page.getByLabel('Channel URL').fill('https://www.youtube.com/@queued-smoke');
   await page.getByRole('button', { name: 'Add channel' }).click();
@@ -483,6 +483,52 @@ test('critical archive flows render without network downloads', async ({ page })
   await expect(page.getByTestId('job-dashboard')).toContainText('Add channel');
   await topActions.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByLabel('Readiness diagnostics')).toBeVisible();
+});
+
+test('topbar quick queue adds a video from any page without navigating', async ({ page }) => {
+  let downloadRequests = 0;
+  await page.route('**/api/home/videos?*', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== '/api/home/videos') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({ json: { data: [mockHomeVideo(1)], pagination: { page: 1, page_size: 50, total: 1 } } });
+  });
+  await page.route('**/api/downloads', async route => {
+    downloadRequests += 1;
+    await route.fulfill({ json: downloadJob(`quick-queue-${downloadRequests}`, 'queued', 0), status: 202 });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('library-route')).toBeVisible();
+
+  const trigger = page.getByTestId('quick-queue-trigger');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('quick-queue-panel')).toBeVisible();
+  await expect(page.getByLabel('Video URL')).toBeFocused();
+  await expect(page).toHaveURL(/\/$/);
+
+  await page.getByTestId('quick-queue-url').fill('https://www.youtube.com/watch?v=abc123DEF45');
+  await page.getByTestId('quick-queue-submit').click();
+  await expect(page.getByTestId('quick-queue-status')).toContainText('Video download queued.');
+  expect(downloadRequests).toBe(1);
+  await expect(page).toHaveURL(/\/$/);
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('quick-queue-panel')).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(page.getByTestId('quick-queue-panel')).toBeVisible();
+  await page.getByTestId('library-feed-summary').click({ position: { x: 10, y: 10 } });
+  await expect(page.getByTestId('quick-queue-panel')).toHaveCount(0);
+
+  await trigger.click();
+  await page.getByTestId('quick-queue-panel').getByRole('link', { name: 'Open queue' }).click();
+  await expect(page.getByLabel('Durable jobs')).toBeVisible();
 });
 
 test('catalog-only pages make media availability explicit', async ({ page }) => {

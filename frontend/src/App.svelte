@@ -122,6 +122,10 @@
   let librarySort = videoSortFromSearch(locationSearch);
   let channelURL = '';
   let videoURL = '';
+  let quickQueueOpen = false;
+  let quickQueueRoot;
+  let quickQueueInput;
+  let quickQueueButton;
   let watchMediaElement;
   let playbackProgressMutationToken = 0;
   let playbackProgressInvalidation = { videoID: '', version: 0 };
@@ -258,12 +262,16 @@
   window.addEventListener('popstate', handlePopState);
   window.addEventListener('focus', handleWatchMediaURLWake);
   document.addEventListener('visibilitychange', handleWatchMediaURLWake);
+  document.addEventListener('pointerdown', handleQuickQueuePointerDown);
+  document.addEventListener('keydown', quickQueueKeydown);
   loadSession();
 
   onDestroy(() => {
     window.removeEventListener('popstate', handlePopState);
     window.removeEventListener('focus', handleWatchMediaURLWake);
     document.removeEventListener('visibilitychange', handleWatchMediaURLWake);
+    document.removeEventListener('pointerdown', handleQuickQueuePointerDown);
+    document.removeEventListener('keydown', quickQueueKeydown);
     if (channelJobTimer) clearTimeout(channelJobTimer);
     if (videoJobTimer) clearTimeout(videoJobTimer);
     if (previewJobTimer) clearTimeout(previewJobTimer);
@@ -1413,6 +1421,28 @@
     const duration = Math.max(0, Math.floor(Number(watchMediaElement?.duration) || Number(item?.duration_seconds) || Number(item?.progress?.duration_seconds) || 0));
     const position = duration > 0 ? duration : Math.max(0, Math.floor(Number(watchMediaElement?.currentTime) || Number(item?.position_seconds) || Number(item?.progress?.position_seconds) || 0));
     return { position_seconds: position, duration_seconds: duration, watched: true };
+  }
+
+  function toggleQuickQueue() {
+    quickQueueOpen = !quickQueueOpen;
+    if (quickQueueOpen) {
+      queueMicrotask(() => quickQueueInput?.focus());
+    } else {
+      quickQueueButton?.focus();
+    }
+  }
+
+  function handleQuickQueuePointerDown(event) {
+    if (!quickQueueOpen) return;
+    if (quickQueueRoot && !quickQueueRoot.contains(event.target)) quickQueueOpen = false;
+  }
+
+  function quickQueueKeydown(event) {
+    if (!quickQueueOpen) return;
+    if (event.key === 'Escape') {
+      quickQueueOpen = false;
+      quickQueueButton?.focus();
+    }
   }
 
   async function addVideo(rawURL = videoURL, options = {}) {
@@ -3078,15 +3108,32 @@
     </form>
 
     <div class="top-actions">
-      <a class="top-action-link" class:active={path === '/downloads'} href="/downloads" aria-label="Open queue" aria-current={path === '/downloads' ? 'page' : undefined} title="Open queue" onclick={event => navigate(event, '/downloads')}>
-        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-          <path d="M4 7h10" />
-          <path d="M4 12h10" />
-          <path d="M4 17h6" />
-          <path d="M17 14v5" />
-          <path d="m14.5 16.5 2.5 2.5 2.5-2.5" />
-        </svg>
-      </a>
+      <div class="quick-queue" bind:this={quickQueueRoot}>
+        <button class="top-action-link" class:active={quickQueueOpen} type="button" aria-label="Queue a video" aria-haspopup="dialog" aria-expanded={quickQueueOpen} title="Queue a video" bind:this={quickQueueButton} onclick={toggleQuickQueue} data-testid="quick-queue-trigger">
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+            <path d="M4 7h10" />
+            <path d="M4 12h10" />
+            <path d="M4 17h6" />
+            <path d="M17 14v5" />
+            <path d="m14.5 16.5 2.5 2.5 2.5-2.5" />
+          </svg>
+        </button>
+        {#if quickQueueOpen}
+          <div class="quick-queue-panel" role="dialog" aria-modal="false" aria-label="Queue a video" tabindex="-1" data-testid="quick-queue-panel">
+            <form class="quick-queue-form" onsubmit={event => { event.preventDefault(); addVideo(); }}>
+              <label class="visually-hidden" for="quick-queue-url">Video URL</label>
+              <input id="quick-queue-url" bind:this={quickQueueInput} bind:value={videoURL} type="url" placeholder="https://www.youtube.com/watch?v=..." required data-testid="quick-queue-url" />
+              <button type="submit" disabled={videoSubmitDisabled} data-testid="quick-queue-submit">{videoJob.status === 'loading' ? 'Queueing' : 'Add video'}</button>
+            </form>
+            {#if videoJob.status !== 'idle'}
+              <div role="status" aria-live="polite" class:state-error={videoJob.status === 'error' || videoJob.status === 'failed'} class="job-state quick-queue-status" data-testid="quick-queue-status">
+                {#if videoJob.status === 'queued'}Video download queued.{:else if videoJob.status === 'running'}Downloading video...{:else if videoJob.status === 'succeeded'}Video imported and library refreshed.{:else if videoJob.status === 'failed'}Video download failed: {videoJob.error || 'unknown error'}{:else if videoJob.status === 'cancelled'}Video download cancelled.{:else if videoJob.status === 'error'}Could not add video: {videoJob.error}{:else}Video job status: {videoJob.status}{/if}
+              </div>
+            {/if}
+            <a class="quick-queue-link" href="/downloads" onclick={event => navigate(event, '/downloads')}>Open queue</a>
+          </div>
+        {/if}
+      </div>
       <a class="top-action-link" class:active={path === '/settings'} href="/settings" aria-label="Settings" aria-current={path === '/settings' ? 'page' : undefined} title="Settings" onclick={event => navigate(event, '/settings')}>
         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
           <path d="M4 7h9" />

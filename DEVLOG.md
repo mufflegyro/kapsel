@@ -188,3 +188,24 @@ confirm-dialog name from the list row as well as the detail page. e2e:
 "playlist can be removed from the library list" — imports a CSV playlist,
 removes it from the row, asserts the "Playlist removed." status and that the
 row leaves the list.
+
+## 2026-08-26 — Queue a video from the topbar on any page
+
+The first topbar circle (previously a link to `/downloads`) is now a "Queue a
+video" trigger that pops a slimline panel with a video URL input and "Add
+video" button, so a video can be queued to the worker queue from any route
+without navigating. It reuses the existing `/api/downloads` enqueue flow and
+`videoJob` state machine, so status stays consistent with the Downloads page.
+Escape and outside pointer-down close the panel; the input is auto-focused on
+open. The full Downloads page stays reachable via the sidebar and via an "Open
+queue" link inside the panel. The Settings circle is unchanged.
+
+- Found while building this: Svelte 5 legacy template expressions that call a
+  function (`{videoQueueStatusLabel()}`) compile to an untracked dependency
+  array and never re-render on state change, so the popup status uses the same
+  inline `{#if}` chain as the Downloads page instead.
+- e2e: `topbar quick queue adds a video from any page without navigating` —
+  queues a video from home, asserts no navigation, Escape/outside-click close,
+  and the panel's "Open queue" link reaches the Downloads page. `pnpm check`
+  clean; full suite 106 passed (1 pre-existing flake: `catalog download
+  success snapshots refresh route data once`, fails on base code too).
