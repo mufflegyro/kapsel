@@ -316,7 +316,50 @@ func NewHandler(options ...Option) http.Handler {
 	}
 	mux.Handle("GET /", frontend(web.Static()))
 
-	return securityHeaders(mux)
+	return cors(securityHeaders(mux))
+}
+
+// corsAllowedOrigins are the browser origins allowed to read /api responses
+// cross-origin — the pages where the Yummle save userscript runs (YouTube).
+// The Origin header is echoed only for these, so arbitrary websites cannot
+// read archive data from a browser pointed at this server.
+func corsAllowedOrigin(origin string) string {
+	switch strings.ToLower(strings.TrimSuffix(origin, "/")) {
+	case "https://www.youtube.com", "https://m.youtube.com", "https://www.youtube-nocookie.com":
+		return origin
+	}
+	return ""
+}
+
+// cors answers the CORS preflight and adds Access-Control-Allow-Origin for
+// /api/* requests from allowlisted origins (the userscript's enqueue call).
+// OPTIONS preflights are answered before the mux so unknown routes still get
+// a valid preflight response; non-allowlisted origins and non-API paths get
+// no CORS headers at all.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" || !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		allowed := corsAllowedOrigin(origin)
+		if allowed == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		header := w.Header()
+		header.Set("Access-Control-Allow-Origin", allowed)
+		header.Add("Vary", "Origin")
+		if r.Method == http.MethodOptions {
+			header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			header.Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+			header.Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {

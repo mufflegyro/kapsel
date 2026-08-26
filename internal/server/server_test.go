@@ -49,6 +49,63 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestCORSForUserscriptOrigins(t *testing.T) {
+	t.Parallel()
+
+	run := func(method, target, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		NewHandler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// A YouTube preflight for the userscript's enqueue endpoint is answered
+	// with the CORS headers, without touching the (possibly unknown) route.
+	rec := run(http.MethodOptions, "/api/downloads", "https://www.youtube.com")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS preflight status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.youtube.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want the echoed YouTube origin", got)
+	}
+	if rec.Header().Get("Access-Control-Allow-Methods") == "" || rec.Header().Get("Access-Control-Allow-Headers") == "" {
+		t.Fatal("preflight is missing Access-Control-Allow-Methods or Access-Control-Allow-Headers")
+	}
+
+	// Actual API responses from an allowlisted origin carry the header.
+	rec = run(http.MethodGet, "/api/health", "https://m.youtube.com")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/health status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://m.youtube.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want https://m.youtube.com", got)
+	}
+
+	// Arbitrary or lookalike origins get no CORS headers, so browsers keep
+	// blocking cross-origin reads from untrusted sites.
+	for _, origin := range []string{"https://evil.example", "https://www.youtube.com.evil.example"} {
+		rec := run(http.MethodGet, "/api/health", origin)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("origin %q unexpectedly allowed: %q", origin, got)
+		}
+	}
+
+	// Requests without an Origin header get no CORS headers.
+	rec = run(http.MethodGet, "/api/health", "")
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("no-origin request got Access-Control-Allow-Origin %q", got)
+	}
+
+	// Non-API paths are never given CORS headers.
+	rec = run(http.MethodOptions, "/", "https://www.youtube.com")
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("non-API path got Access-Control-Allow-Origin %q", got)
+	}
+}
+
 func TestReadinessEndpointReportsYTDLPStatus(t *testing.T) {
 	t.Parallel()
 

@@ -95,3 +95,15 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
   DOM APIs (`createElementNS` / `appendChild` / `replaceChildren`), never
   `innerHTML` — keep it that way in the WebExtension follow-up too (content
   scripts there face the same CSP).
+- Safari / Userscripts: `GM_registerMenuCommand` is not implemented there
+  (quoid/userscripts#230), which crashed the script at startup → no buttons.
+  Every GM call is now guarded, with a native `fetch` fallback when
+  `GM_xmlhttpRequest` is unavailable and a `__yummleSave.setServer(url)`
+  console helper for configuring the server where the menu command is
+  missing. The server sends `Access-Control-Allow-Origin` for youtube.com
+  origins (allowlisted in `internal/server`), so the fetch fallback works;
+  `https://` Yummle deployments avoid Safari's HTTP-loopback mixed-content
+  block (WebKit bug 171934) entirely.
+- The WebExtension follow-up replaces the userscript's transport with a
+  background-script `fetch` under `host_permissions`, which needs neither
+  `@connect` nor server CORS.

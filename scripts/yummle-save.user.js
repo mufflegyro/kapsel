@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yummle Save — queue YouTube videos to Yummle
 // @namespace    yummle.save
-// @version      0.2.1
+// @version      0.3.0
 // @description  Adds a save button to YouTube video thumbnails; clicking queues the video in your local Yummle archive (same queue as the topbar "Queue a video"). Prototype.
 // @author       Yummle
 // @match        https://www.youtube.com/*
@@ -17,20 +17,26 @@
 // @noframes
 // ==/UserScript==
 //
-// Install: Tampermonkey (or Violentmonkey) → "Create a new script" → paste →
-// save → reload the YouTube tab. Default server is http://127.0.0.1:18080
-// (the local test instance). To use a different server, use the script menu
-// command "Set Yummle server URL" AND add that host to the @connect list
-// above.
+// Install: Tampermonkey / Violentmonkey (Firefox, Chrome) or Userscripts
+// (Safari) → create a new script → paste → save → reload the YouTube tab.
+//
+// Configure the server:
+//   - Tampermonkey/Violentmonkey: script-menu command "Set Yummle server URL".
+//   - Userscripts (Safari): GM_registerMenuCommand is NOT implemented there,
+//     so run this once in the browser console on the YouTube tab:
+//         __yummleSave.setServer('https://yummle.local.n45.xyz')
+//   - Any manager: edit DEFAULT_SERVER below and re-save.
+// When using a Tampermonkey-style manager with a non-default host, add that
+// host to the @connect list above (Userscripts asks for domain access once).
 //
 // Notes:
-// - YouTube's CSP includes `require-trusted-types-for 'script'`, so HTML
-//   string sinks (innerHTML) are blocked. All icons are built with DOM APIs
-//   (createElementNS / appendChild) — never innerHTML.
-// - Diagnostics: buttons are always visible on thumbnails (highlighted on
-//   hover). If you see no buttons, open the browser console (Ctrl+Shift+J)
-//   and run `__yummleSave.debug()` — it reports whether the script loaded,
-//   how many buttons are attached, and whether video links were found.
+// - YouTube's CSP (require-trusted-types-for 'script') blocks innerHTML; all
+//   icons are built with DOM APIs. Never reintroduce innerHTML assignments.
+// - Safari + Userscripts: GM_registerMenuCommand is unsupported, so every GM
+//   call is guarded; the script falls back to localStorage + native fetch
+//   (which needs CORS on the server — Yummle now sends Access-Control-Allow-
+//   Origin for youtube.com origins).
+// - Diagnostics: run `__yummleSave.debug()` in the console.
 
 (() => {
   'use strict';
@@ -41,9 +47,40 @@
   const PROCESSED_ATTR = 'data-yummle-save';
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
+  // Storage that works on every manager: GM_* when granted, localStorage
+  // otherwise (Safari + Userscripts has no GM_registerMenuCommand but does
+  // implement GM_getValue/GM_setValue; this guards the rest).
+  function storageGet(key, fallback) {
+    if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
+    try {
+      const value = localStorage.getItem(`yummle:${key}`);
+      return value === null ? fallback : value;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function storageSet(key, value) {
+    if (typeof GM_setValue === 'function') {
+      GM_setValue(key, value);
+      return;
+    }
+    try {
+      localStorage.setItem(`yummle:${key}`, value);
+    } catch {
+      // no persistence available; the in-memory default still applies
+    }
+  }
+
   function serverUrl() {
-    const stored = GM_getValue(SERVER_KEY, DEFAULT_SERVER);
+    const stored = storageGet(SERVER_KEY, DEFAULT_SERVER);
     return String(stored || DEFAULT_SERVER).replace(/\/+$/, '');
+  }
+
+  function setServer(url) {
+    const value = String(url || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/.+/.test(value)) throw new Error('Yummle server URL must start with http:// or https://');
+    storageSet(SERVER_KEY, value);
   }
 
   function injectStyles() {
@@ -143,43 +180,64 @@
     button.replaceChildren(buildIcon(kind));
   }
 
-  function queueVideo(button, videoID) {
+  // POST {url} to the queue. Prefer GM_xmlhttpRequest (cross-origin without
+  // CORS, used by Firefox/Chrome Tampermonkey and Safari Userscripts); fall
+  // back to native fetch for managers without GM_xmlhttpRequest — that path
+  // needs the server to send Access-Control-Allow-Origin (Yummle does for
+  // youtube.com origins). Resolves with {status, responseText} or rejects.
+  function postToQueue(server, url) {
+    const target = `${server}/api/downloads`;
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    const body = JSON.stringify({ url });
+
+    if (typeof GM_xmlhttpRequest === 'function') {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'POST',
+          url: target,
+          headers,
+          data: body,
+          timeout: 15000,
+          onload: response => resolve({ status: response.status, responseText: response.responseText || '' }),
+          onerror: () => reject(new Error('Yummle unreachable — is the server running?')),
+          ontimeout: () => reject(new Error('Yummle timed out')),
+        });
+      });
+    }
+
+    return fetch(target, { method: 'POST', headers, body, mode: 'cors', credentials: 'omit' })
+      .then(async response => ({ status: response.status, responseText: await response.text() }))
+      .catch(() => {
+        throw new Error('Yummle unreachable — server down or CORS not enabled');
+      });
+  }
+
+  async function queueVideo(button, videoID) {
     if (button.dataset.state === 'loading' || button.dataset.state === 'queued') return;
     const server = serverUrl();
     const url = `https://www.youtube.com/watch?v=${videoID}`;
     setButtonState(button, 'loading', 'Queuing to Yummle…');
 
-    GM_xmlhttpRequest({
-      method: 'POST',
-      url: `${server}/api/downloads`,
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      data: JSON.stringify({ url }),
-      timeout: 15000,
-      onload: response => {
-        if (response.status >= 200 && response.status < 300) {
-          setButtonState(button, 'queued', 'Queued in Yummle ✓');
-          setTimeout(() => setButtonState(button, 'idle'), 2500);
-          return;
-        }
-        let message = `Yummle: HTTP ${response.status}`;
-        try {
-          const body = JSON.parse(response.responseText);
-          if (body && body.error) message = body.error;
-        } catch {
-          // keep the status-based message
-        }
-        setButtonState(button, 'error', message);
-        setTimeout(() => setButtonState(button, 'idle'), 3500);
-      },
-      onerror: () => {
-        setButtonState(button, 'error', 'Yummle unreachable — is the server running?');
-        setTimeout(() => setButtonState(button, 'idle'), 3500);
-      },
-      ontimeout: () => {
-        setButtonState(button, 'error', 'Yummle timed out');
-        setTimeout(() => setButtonState(button, 'idle'), 3500);
-      },
-    });
+    try {
+      const response = await postToQueue(server, url);
+      if (response.status >= 200 && response.status < 300) {
+        setButtonState(button, 'queued', 'Queued in Yummle ✓');
+        setTimeout(() => setButtonState(button, 'idle'), 2500);
+        return;
+      }
+      let message = `Yummle: HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(response.responseText || '');
+        if (parsed && parsed.error) message = parsed.error;
+      } catch {
+        // keep the status-based message
+      }
+      setButtonState(button, 'error', message);
+      setTimeout(() => setButtonState(button, 'idle'), 3500);
+    } catch (error) {
+      setButtonState(button, 'error', error.message);
+      setTimeout(() => setButtonState(button, 'idle'), 3500);
+    }
   }
 
   function attachButton(anchor, videoID) {
@@ -230,11 +288,14 @@
   }
 
   function registerMenu() {
+    // GM_registerMenuCommand is not implemented in Userscripts (Safari);
+    // guard so the script still runs there.
+    if (typeof GM_registerMenuCommand !== 'function') return;
     GM_registerMenuCommand('Set Yummle server URL', () => {
       const current = serverUrl();
       const next = window.prompt('Yummle server URL (add this host to @connect in the script header):', current);
       if (next && /^https?:\/\/.+/.test(next.trim())) {
-        GM_setValue(SERVER_KEY, next.trim().replace(/\/+$/, ''));
+        setServer(next.trim());
       }
     });
     GM_registerMenuCommand('Open Yummle downloads', () => {
@@ -250,8 +311,9 @@
     const links = document.querySelectorAll(VIDEO_LINK_SELECTOR);
     const thumbnailLinks = [...links].filter(isThumbnailAnchor);
     return {
-      scriptVersion: '0.2.1',
+      scriptVersion: '0.3.0',
       loaded: true,
+      transport: typeof GM_xmlhttpRequest === 'function' ? 'GM_xmlhttpRequest' : 'fetch (needs server CORS)',
       server: serverUrl(),
       videoLinksFound: links.length,
       thumbnailLinksFound: thumbnailLinks.length,
@@ -265,11 +327,14 @@
     };
   }
 
-  window.__yummleSave = { debug: debugInfo };
+  window.__yummleSave = {
+    debug: debugInfo,
+    setServer,
+  };
 
   injectStyles();
   registerMenu();
-  console.log(`[Yummle Save] v0.2.1 loaded, server=${serverUrl()}`);
+  console.log(`[Yummle Save] v0.3.0 loaded, server=${serverUrl()}, transport=${typeof GM_xmlhttpRequest === 'function' ? 'GM_xmlhttpRequest' : 'fetch'}`);
   processNode(document.body);
 
   const observer = new MutationObserver(mutations => {
