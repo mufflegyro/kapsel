@@ -34,8 +34,10 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
     extract the 11-character video id; skip already-processed anchors.
   - Add a circular download-icon button overlaid on the thumbnail's top-left
     corner (small `position: relative` mutation on the anchor, absolutely
-    positioned child, high z-index). Hidden by default, revealed on anchor
-    hover; always visible on touch (`@media (hover: none)`).
+    positioned child, high z-index, `!important` styles so YouTube's CSS
+    cannot hide it). Always visible so the icon is discoverable; highlighted
+    on anchor hover via both CSS and a JS `mouseenter`/`mouseleave` class
+    toggle (belt and braces).
   - Use a `MutationObserver` on `document.body` for added nodes plus a periodic
     rescan as a belt-and-braces fallback against YouTube's lazy rendering and
     SPA re-renders (YouTube re-renders thumbnails constantly).
@@ -57,12 +59,17 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
   enabled, `GM_xmlhttpRequest` sends the browser's cookies for the target
   origin, so being logged into Yummle in the same browser profile is expected
   to carry the session; a token-based auth path is a follow-up.
+- Diagnostics: console log on load (`[Yummle Save] v0.2.0 loaded, server=…`)
+  plus a `__yummleSave.debug()` console helper reporting video-link counts,
+  button count, and a per-link attach sample — used to distinguish "script
+  not running" from "selectors don't match" when buttons are missing.
 
 ## Acceptance Criteria
 
 - Installed via Tampermonkey or Violentmonkey in Firefox, on
   `https://www.youtube.com/` the save icon appears on video thumbnails (watch
-  grid, channel/playlist views, search results) on hover.
+  grid, channel/playlist views, search results) — always visible, highlighted
+  on hover.
 - Clicking a thumbnail's save icon queues the video: it appears in
   `GET /api/jobs` and on the Downloads page, without leaving YouTube.
 - Shorts links (`/shorts/<id>`) queue correctly; non-video links are ignored.

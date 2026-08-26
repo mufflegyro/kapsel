@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yummle Save — queue YouTube videos to Yummle
 // @namespace    yummle.save
-// @version      0.1.0
+// @version      0.2.0
 // @description  Adds a save button to YouTube video thumbnails; clicking queues the video in your local Yummle archive (same queue as the topbar "Queue a video"). Prototype.
 // @author       Yummle
 // @match        https://www.youtube.com/*
@@ -18,10 +18,15 @@
 // ==/UserScript==
 //
 // Install: Tampermonkey (or Violentmonkey) → "Create a new script" → paste →
-// save. Default server is http://127.0.0.1:18080 (the local test instance).
-// To use a different server, use the script menu command "Set Yummle server
-// URL" AND add that host to the @connect list above (Tampermonkey will also
-// ask once when the new host is first contacted).
+// save → reload the YouTube tab. Default server is http://127.0.0.1:18080
+// (the local test instance). To use a different server, use the script menu
+// command "Set Yummle server URL" AND add that host to the @connect list
+// above.
+//
+// Diagnostics: buttons are always visible on thumbnails (highlighted on
+// hover). If you see no buttons, open the browser console (Ctrl+Shift+J) and
+// run `__yummleSave.debug()` — it reports whether the script loaded, how many
+// buttons are attached, and whether a few video links were found.
 
 (() => {
   'use strict';
@@ -48,48 +53,40 @@
     style.id = 'yummle-save-styles';
     style.textContent = `
       .yummle-save-btn {
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        z-index: 9999;
-        width: 34px;
-        height: 34px;
-        padding: 0;
-        border: 1px solid rgba(255, 255, 255, 0.35);
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.78);
-        color: #fff;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.15s ease, background 0.15s ease, transform 0.15s ease;
+        position: absolute !important;
+        top: 6px !important;
+        left: 6px !important;
+        z-index: 9999 !important;
+        width: 34px !important;
+        height: 34px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: 1px solid rgba(255, 255, 255, 0.4) !important;
+        border-radius: 50% !important;
+        background: rgba(0, 0, 0, 0.78) !important;
+        color: #fff !important;
+        cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        opacity: 0.92 !important;
+        pointer-events: auto !important;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5) !important;
+        transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease !important;
       }
-      .yummle-save-btn:hover {
-        background: rgba(255, 159, 61, 0.95);
-        color: #1d1306;
-        transform: scale(1.08);
+      .yummle-save-btn:hover,
+      .yummle-save-btn.highlight {
+        background: rgba(255, 159, 61, 0.95) !important;
+        color: #1d1306 !important;
+        transform: scale(1.1) !important;
       }
       .yummle-save-btn[data-state="queued"] {
-        background: rgba(46, 160, 67, 0.95);
-        color: #fff;
+        background: rgba(46, 160, 67, 0.95) !important;
+        color: #fff !important;
       }
       .yummle-save-btn[data-state="error"] {
-        background: rgba(214, 69, 60, 0.95);
-        color: #fff;
-      }
-      a:hover > .yummle-save-btn,
-      a:focus-visible > .yummle-save-btn {
-        opacity: 1;
-        pointer-events: auto;
-      }
-      @media (hover: none) {
-        .yummle-save-btn {
-          opacity: 1;
-          pointer-events: auto;
-        }
+        background: rgba(214, 69, 60, 0.95) !important;
+        color: #fff !important;
       }
     `;
     document.documentElement.appendChild(style);
@@ -103,10 +100,10 @@
     return short ? short[1] : '';
   }
 
-  // Only attach to real thumbnails (which contain an <img>), not to plain
-  // video-title text links that also match the href selector.
+  // Only attach to real thumbnails, not to plain video-title text links that
+  // also match the href selector.
   function isThumbnailAnchor(anchor) {
-    return !!anchor.querySelector('img');
+    return !!anchor.querySelector('img') || !!anchor.querySelector('ytd-thumbnail');
   }
 
   function setButtonState(button, state, title) {
@@ -174,7 +171,7 @@
     button.className = 'yummle-save-btn';
     button.dataset.state = 'idle';
     button.title = 'Save to Yummle';
-    button.setAttribute('aria-label', `Save video to Yummle`);
+    button.setAttribute('aria-label', 'Save video to Yummle');
     button.innerHTML = DOWNLOAD_ICON;
     button.addEventListener('click', event => {
       event.preventDefault();
@@ -182,6 +179,8 @@
       queueVideo(button, videoID);
     });
     button.addEventListener('mousedown', event => event.stopPropagation());
+    anchor.addEventListener('mouseenter', () => button.classList.add('highlight'));
+    anchor.addEventListener('mouseleave', () => button.classList.remove('highlight'));
     anchor.appendChild(button);
   }
 
@@ -212,10 +211,36 @@
     GM_registerMenuCommand('Open Yummle downloads', () => {
       window.open(`${serverUrl()}/downloads`, '_blank');
     });
+    GM_registerMenuCommand('Yummle save: diagnostic', () => {
+      console.log(__yummleSave.debug());
+    });
   }
+
+  function debugInfo() {
+    const buttons = document.querySelectorAll('.yummle-save-btn');
+    const links = document.querySelectorAll(VIDEO_LINK_SELECTOR);
+    const thumbnailLinks = [...links].filter(isThumbnailAnchor);
+    return {
+      scriptVersion: '0.2.0',
+      loaded: true,
+      server: serverUrl(),
+      videoLinksFound: links.length,
+      thumbnailLinksFound: thumbnailLinks.length,
+      buttonsAttached: buttons.length,
+      sample: [...links].slice(0, 3).map(a => ({
+        href: a.getAttribute('href'),
+        hasImg: !!a.querySelector('img'),
+        hasThumbnailEl: !!a.querySelector('ytd-thumbnail'),
+        attached: a.getAttribute(PROCESSED_ATTR) === '1',
+      })),
+    };
+  }
+
+  window.__yummleSave = { debug: debugInfo };
 
   injectStyles();
   registerMenu();
+  console.log(`[Yummle Save] v0.2.0 loaded, server=${serverUrl()}`);
   processNode(document.body);
 
   const observer = new MutationObserver(mutations => {
