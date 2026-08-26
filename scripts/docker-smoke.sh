@@ -9,7 +9,9 @@ set -euo pipefail
 #   2. docker-compose.yml is valid,
 #   3. a fresh container starts, migrates an empty DB, and reports healthy,
 #   4. yt-dlp, ffmpeg, and storage are ready (via /api/settings),
-#   5. the media volume is writable by the unprivileged service user,
+#   5. the media volume is writable by the unprivileged service user, and
+#      the yt-dlp update target (file + directory) is writable by that user,
+#      so the auto-update job can replace the binary in place,
 #   6. media and database survive container recreation.
 #
 # It never touches the real deployment volumes (kapsel-data / kapsel-media /
@@ -131,6 +133,14 @@ echo "database: migrated (${db_size} bytes)"
 docker exec -u kapsel "$CONTAINER" sh -c "echo smoke > /media/${MARKER}" \
   || fail "media volume not writable by the kapsel service user"
 echo "media volume: writable by service user"
+
+# Regression: the yt-dlp auto-update job renames a temp file over the binary,
+# so the kapsel user must be able to write BOTH the file and its directory.
+# This used to fail in the image when yt-dlp lived in root-owned /usr/local/bin.
+docker exec -u kapsel "$CONTAINER" sh -c \
+  "test -w /var/lib/kapsel/bin/yt-dlp && echo smoke > /var/lib/kapsel/bin/.smoke-write && rm -f /var/lib/kapsel/bin/.smoke-write" \
+  || fail "yt-dlp update target not writable by the kapsel service user"
+echo "yt-dlp update target: writable by service user"
 
 echo "==> [6/6] media + database survive container recreation"
 docker rm -f "$CONTAINER" >/dev/null || fail "could not remove container"

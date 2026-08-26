@@ -13,7 +13,7 @@ be published on a home network or sit behind a reverse proxy.
 | Component | Location | Notes |
 |-----------|----------|-------|
 | Kapsel binary | `/opt/kapsel/kapsel` | Static build, frontend embedded, runs as unprivileged `kapsel` user |
-| yt-dlp | `/usr/local/bin/yt-dlp` | Nightly standalone; auto-updated in place by Kapsel (`KAPSEL_YTDLP_UPDATE_INTERVAL`, default `24h`) |
+| yt-dlp | `/var/lib/kapsel/bin/yt-dlp` | Nightly standalone; auto-updated in place by Kapsel (`KAPSEL_YTDLP_UPDATE_INTERVAL`, default `24h`). Lives in a `kapsel`-owned directory so the non-root service user can overwrite it |
 | yt-dlp wrapper | `/usr/local/bin/kapsel-ytdlp` | Selects Deno as JS runtime (`--js-runtimes deno:/usr/local/bin/deno`) |
 | Deno | `/usr/local/bin/deno` | JS runtime for current YouTube client challenges |
 | ffmpeg | `/usr/bin/ffmpeg` | Timeline previews and format merging |

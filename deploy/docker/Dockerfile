@@ -63,19 +63,25 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp nightly standalone binary. The yt-dlp_linux* assets are
-# self-contained (PyInstaller-bundled) and support `--update-to nightly`, so
-# Kapsel's KAPSEL_YTDLP_UPDATE_INTERVAL job can keep the binary current in
-# place inside the container.
-RUN case "${TARGETARCH}" in \
+# yt-dlp nightly standalone binary, installed into a directory owned by the
+# kapsel service user. The yt-dlp_linux* assets are self-contained
+# (PyInstaller-bundled) and support `--update-to nightly`, so Kapsel's
+# KAPSEL_YTDLP_UPDATE_INTERVAL job can keep the binary current in place —
+# but the update renames a temp file over the binary, so the kapsel user must
+# be able to write both the file AND its directory. /usr/local/bin is
+# root-owned and read-only for the non-root service user (that is why this
+# used to fail with "Insufficient permissions to write to /usr/local/bin/yt-dlp");
+# the binary therefore lives under /var/lib/kapsel/bin.
+RUN mkdir -p /var/lib/kapsel/bin \
+    && case "${TARGETARCH}" in \
       amd64) asset=yt-dlp_linux ;; \
       arm64) asset=yt-dlp_linux_aarch64 ;; \
       *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSLo /usr/local/bin/yt-dlp \
+    && curl -fsSLo /var/lib/kapsel/bin/yt-dlp \
         "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/${asset}" \
-    && chmod 0755 /usr/local/bin/yt-dlp \
-    && /usr/local/bin/yt-dlp --version
+    && chmod 0755 /var/lib/kapsel/bin/yt-dlp \
+    && /var/lib/kapsel/bin/yt-dlp --version
 
 # Deno: JS runtime for current YouTube client challenges. yt-dlp selects it
 # via --js-runtimes deno:/usr/local/bin/deno (see /usr/local/bin/kapsel-ytdlp).
@@ -91,10 +97,13 @@ RUN case "${TARGETARCH}" in \
     && /usr/local/bin/deno --version
 
 # Non-root service user. The entrypoint chowns the mounted volumes and drops
-# privileges before exec'ing kapsel.
+# privileges before exec'ing kapsel. /var/lib/kapsel/bin is created by the
+# yt-dlp download above as root; hand it (and the binary) to kapsel so the
+# auto-update job can write in place.
 RUN groupadd --system kapsel \
     && useradd --system --gid kapsel --home-dir /var/lib/kapsel --shell /usr/sbin/nologin kapsel \
-    && install -d -o kapsel -g kapsel /var/lib/kapsel
+    && install -d -o kapsel -g kapsel /var/lib/kapsel \
+    && chown -R kapsel:kapsel /var/lib/kapsel/bin
 
 COPY --from=build /out/kapsel /opt/kapsel/kapsel
 COPY deploy/docker/kapsel-ytdlp /usr/local/bin/kapsel-ytdlp

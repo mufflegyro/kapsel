@@ -7,11 +7,14 @@ set -euo pipefail
 #
 # Kapsel runs this wrapper as KAPSEL_YTDLP_PATH. All arguments (downloads,
 # --version, --update-to nightly) pass through to yt-dlp. The auto-update job
-# writes the yt-dlp binary in place, which is why /usr/local/bin must remain
-# writable in the container (it is a writable layer by default).
+# writes the yt-dlp binary in place, so the binary must live in a directory
+# the kapsel service user can write: /var/lib/kapsel/bin. It must NOT be in
+# /usr/local/bin, which is root-owned and read-only for the non-root service
+# user (the update used to fail there with "Insufficient permissions to write
+# to /usr/local/bin/yt-dlp").
 
-if [[ -x /usr/local/bin/yt-dlp ]]; then
-  exec /usr/local/bin/yt-dlp --js-runtimes deno:/usr/local/bin/deno "$@"
+if [[ -x /var/lib/kapsel/bin/yt-dlp ]]; then
+  exec /var/lib/kapsel/bin/yt-dlp --js-runtimes deno:/usr/local/bin/deno "$@"
 fi
 
 exec yt-dlp "$@"
