@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yummle Save — queue YouTube videos to Yummle
 // @namespace    yummle.save
-// @version      0.2.0
+// @version      0.2.1
 // @description  Adds a save button to YouTube video thumbnails; clicking queues the video in your local Yummle archive (same queue as the topbar "Queue a video"). Prototype.
 // @author       Yummle
 // @match        https://www.youtube.com/*
@@ -23,10 +23,14 @@
 // command "Set Yummle server URL" AND add that host to the @connect list
 // above.
 //
-// Diagnostics: buttons are always visible on thumbnails (highlighted on
-// hover). If you see no buttons, open the browser console (Ctrl+Shift+J) and
-// run `__yummleSave.debug()` — it reports whether the script loaded, how many
-// buttons are attached, and whether a few video links were found.
+// Notes:
+// - YouTube's CSP includes `require-trusted-types-for 'script'`, so HTML
+//   string sinks (innerHTML) are blocked. All icons are built with DOM APIs
+//   (createElementNS / appendChild) — never innerHTML.
+// - Diagnostics: buttons are always visible on thumbnails (highlighted on
+//   hover). If you see no buttons, open the browser console (Ctrl+Shift+J)
+//   and run `__yummleSave.debug()` — it reports whether the script loaded,
+//   how many buttons are attached, and whether video links were found.
 
 (() => {
   'use strict';
@@ -35,13 +39,7 @@
   const DEFAULT_SERVER = 'http://127.0.0.1:18080';
   const VIDEO_LINK_SELECTOR = 'a[href*="/watch?v="], a[href^="/shorts/"]';
   const PROCESSED_ATTR = 'data-yummle-save';
-
-  const DOWNLOAD_ICON =
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M4 12h10"/><path d="M4 17h6"/><path d="M17 14v5"/><path d="m14.5 16.5 2.5 2.5 2.5-2.5"/></svg>';
-  const CHECK_ICON =
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg>';
-  const CROSS_ICON =
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12"/><path d="M18 6 6 18"/></svg>';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
 
   function serverUrl() {
     const stored = GM_getValue(SERVER_KEY, DEFAULT_SERVER);
@@ -92,6 +90,34 @@
     document.documentElement.appendChild(style);
   }
 
+  // Build icons with DOM APIs only: YouTube's CSP (require-trusted-types-for
+  // 'script') blocks HTML string sinks like innerHTML.
+  function buildIcon(kind) {
+    const paths =
+      kind === 'check'
+        ? ['m4.5 12.5 5 5 10-11']
+        : kind === 'cross'
+          ? ['m6 6 12 12', 'M18 6 6 18']
+          : ['M4 7h10', 'M4 12h10', 'M4 17h6', 'M17 14v5', 'm14.5 16.5 2.5 2.5 2.5-2.5'];
+    const strokeWidth = kind === 'download' ? '2.2' : '2.6';
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', strokeWidth);
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of paths) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+
   function videoIDFromAnchor(anchor) {
     const href = anchor.getAttribute('href') || '';
     const watch = href.match(/[?&]v=([A-Za-z0-9_-]{11})/);
@@ -108,15 +134,13 @@
 
   function setButtonState(button, state, title) {
     button.dataset.state = state;
-    if (title) button.title = title;
-    if (state === 'queued') {
-      button.innerHTML = CHECK_ICON;
-    } else if (state === 'error') {
-      button.innerHTML = CROSS_ICON;
-    } else {
-      button.innerHTML = DOWNLOAD_ICON;
-      if (!title) button.title = 'Save to Yummle';
+    if (title) {
+      button.title = title;
+    } else if (state === 'idle') {
+      button.title = 'Save to Yummle';
     }
+    const kind = state === 'queued' ? 'check' : state === 'error' ? 'cross' : 'download';
+    button.replaceChildren(buildIcon(kind));
   }
 
   function queueVideo(button, videoID) {
@@ -172,7 +196,7 @@
     button.dataset.state = 'idle';
     button.title = 'Save to Yummle';
     button.setAttribute('aria-label', 'Save video to Yummle');
-    button.innerHTML = DOWNLOAD_ICON;
+    setButtonState(button, 'idle');
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -186,17 +210,22 @@
 
   function processNode(node) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
-    if (node.matches && node.matches(VIDEO_LINK_SELECTOR)) {
-      const videoID = videoIDFromAnchor(node);
-      if (videoID && isThumbnailAnchor(node)) attachButton(node, videoID);
-    }
-    if (node.querySelectorAll) {
-      const anchors = node.querySelectorAll(VIDEO_LINK_SELECTOR);
-      for (const anchor of anchors) {
-        if (anchor.getAttribute(PROCESSED_ATTR) === '1') continue;
-        const videoID = videoIDFromAnchor(anchor);
-        if (videoID && isThumbnailAnchor(anchor)) attachButton(anchor, videoID);
+    try {
+      if (node.matches && node.matches(VIDEO_LINK_SELECTOR)) {
+        const videoID = videoIDFromAnchor(node);
+        if (videoID && isThumbnailAnchor(node)) attachButton(node, videoID);
       }
+      if (node.querySelectorAll) {
+        const anchors = node.querySelectorAll(VIDEO_LINK_SELECTOR);
+        for (const anchor of anchors) {
+          if (anchor.getAttribute(PROCESSED_ATTR) === '1') continue;
+          const videoID = videoIDFromAnchor(anchor);
+          if (videoID && isThumbnailAnchor(anchor)) attachButton(anchor, videoID);
+        }
+      }
+    } catch (error) {
+      // One bad anchor must not stop the rescan loop.
+      console.warn('[Yummle Save] attach failed:', error);
     }
   }
 
@@ -221,7 +250,7 @@
     const links = document.querySelectorAll(VIDEO_LINK_SELECTOR);
     const thumbnailLinks = [...links].filter(isThumbnailAnchor);
     return {
-      scriptVersion: '0.2.0',
+      scriptVersion: '0.2.1',
       loaded: true,
       server: serverUrl(),
       videoLinksFound: links.length,
@@ -240,7 +269,7 @@
 
   injectStyles();
   registerMenu();
-  console.log(`[Yummle Save] v0.2.0 loaded, server=${serverUrl()}`);
+  console.log(`[Yummle Save] v0.2.1 loaded, server=${serverUrl()}`);
   processNode(document.body);
 
   const observer = new MutationObserver(mutations => {

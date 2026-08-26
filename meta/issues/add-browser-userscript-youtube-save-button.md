@@ -59,7 +59,7 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
   enabled, `GM_xmlhttpRequest` sends the browser's cookies for the target
   origin, so being logged into Yummle in the same browser profile is expected
   to carry the session; a token-based auth path is a follow-up.
-- Diagnostics: console log on load (`[Yummle Save] v0.2.0 loaded, server=…`)
+- Diagnostics: console log on load (`[Yummle Save] v0.2.1 loaded, server=…`)
   plus a `__yummleSave.debug()` console helper reporting video-link counts,
   button count, and a per-link attach sample — used to distinguish "script
   not running" from "selectors don't match" when buttons are missing.
@@ -89,3 +89,9 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
   this to feed/result surfaces.
 - YouTube DOM churn is the long-term maintenance cost; keep selectors broad
   and the processed-anchor guard idempotent so re-renders are cheap.
+- YouTube's CSP (`require-trusted-types-for 'script'`) blocks HTML string
+  sinks: the first browser test showed buttons never appeared because
+  `innerHTML =` threw inside `attachButton`. All button icons are built with
+  DOM APIs (`createElementNS` / `appendChild` / `replaceChildren`), never
+  `innerHTML` — keep it that way in the WebExtension follow-up too (content
+  scripts there face the same CSP).
