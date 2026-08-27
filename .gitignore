@@ -50,4 +50,3 @@ bash_script.sh
 Screenshot*.png
 yummle-screenshot.png
 macos-local.env.example
-scripts/relink_media.py
