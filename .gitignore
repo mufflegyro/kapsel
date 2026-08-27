@@ -1,4 +1,8 @@
 .DS_Store
+
+# Agent tooling (kept local-only; not part of the repo)
+AGENTS.md
+
 .env
 .env.*
 !.env.example
