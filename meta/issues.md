@@ -6,7 +6,7 @@
 - [x] [Queue a video from the topbar on any page](issues/queue-video-from-topbar.md)
 - [x] [Queue a video from the topbar on any page](issues/queue-video-from-topbar.md)
 - [x] [Fix yt-dlp auto-update in the Docker image (permissions)](issues/fix-docker-ytdlp-update-permissions.md)
-- [ ] [Save YouTube videos to the queue from the browser](issues/add-browser-userscript-youtube-save-button.md)
+- [x] [Save YouTube videos to the queue from the browser](issues/add-browser-userscript-youtube-save-button.md)
 - [ ] [Split download worker responsibilities](issues/split-download-worker-responsibilities.md)
 - [ ] [Clarify scheduler job ownership](issues/clarify-scheduler-job-ownership.md)
 - [ ] [Fix YouTube download 403 and raise default to 1080p](issues/fix-youtube-download-403-and-raise-default-to-1080p.md)
