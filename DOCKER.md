@@ -1,6 +1,6 @@
-# Docker Deployment
+# Yummle Docker Deployment
 
-Kapsel ships as a single container: one Go binary with the embedded web UI,
+The Yummle Kapsel deploy ships as a single container: one Go binary with the embedded web UI,
 one SQLite database, and filesystem media storage. The image bundles
 `yt-dlp` (nightly standalone), `ffmpeg`, and Deno (for YouTube JS challenges)
 so downloads and timeline previews work without host tools.
