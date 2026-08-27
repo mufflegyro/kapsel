@@ -44,3 +44,10 @@ backups/
 
 # Local browser screenshots; commit curated assets under docs/ instead.
 brave_screenshot_*.png
+
+# Local scratch / clutter (one-off scripts, stray screenshots, local env)
+bash_script.sh
+Screenshot*.png
+yummle-screenshot.png
+macos-local.env.example
+scripts/relink_media.py
