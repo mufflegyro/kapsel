@@ -19,6 +19,19 @@ Guidance for automated and human contributors working in this repository.
 - Follow the review loop for each issue: write the issue, implement the fix, get a review, then commit.
 - Prefer deleting complexity over wrapping it in new abstractions.
 
+### Branch policy (local-only work)
+
+- `userscript` (browser save userscript + server CORS) and `tvos` (native
+  tvOS client app) are **local-only projects**: they must never be pushed to
+  GitHub. Never run `git push origin userscript` or `git push origin tvos`.
+  They intentionally track no upstream and their contents are kept off the
+  remote.
+- `main` is the only branch that should ever be pushed to `origin`. Before
+  pushing, confirm the current branch is `main` (`git branch --show-current`).
+- If a task is about the userscript or the tvOS app, say so and keep the
+  commit on the corresponding local branch; do not include those changes in
+  `main` commits.
+
 ### Data safety guardrails
 
 These rules exist because a destructive shell command deleted the test archive
