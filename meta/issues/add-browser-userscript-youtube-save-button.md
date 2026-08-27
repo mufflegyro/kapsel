@@ -49,6 +49,14 @@ userscript here is written fresh (no GPL code) and targets Yummle's API.
   - Button state feedback: idle (download icon) → in-flight → queued (green
     check, ~2.5s) or error (red cross, tooltip with the server error /
     "unreachable"), then reset to idle. Ignore clicks while in-flight/queued.
+  - Already-archived detection: as a thumbnail scrolls into view (via
+    `IntersectionObserver`, `rootMargin: 300px`), `GET /api/videos/<yt-id>`
+    checks membership — YouTube IDs are stored as the archive's own video
+    ids, so the existing endpoint is enough. A `200` turns the button into a
+    permanent green check (inert, "Already in Yummle archive"); `404` keeps
+    it normal. Results are cached per page (a re-rendered anchor re-applies
+    the cached status without a second request), and a successful enqueue
+    marks the video archived too.
   - The server already dedupes active download jobs, so re-clicking the same
     video is safe.
 - Configuration:
