@@ -1,8 +1,8 @@
 # Yummle
 
-Yummle is a fork of Kapsel with a few extra features. Kapsel is a small self-hosted video archive for one person or household. It downloads online videos with `yt-dlp`, stores metadata in SQLite, keeps media on the filesystem, and serves a local web UI for browsing, searching, and watching your archive.
+Yummle is an opininated fork of Kapsel with a few extra features built on top. I've deliberately kept the Kapsel naming throughout as that is mainly what is running the show here. Yummle is a collection of tweaks and quality of life improvements for adding media from different sources and connecting to additonal front ends. Docker is the main deployment addition. Kapsel itself is a small self-hosted video archive for one person or household. It downloads online videos with `yt-dlp`, stores metadata in SQLite, keeps media on the filesystem, and serves a local web UI for browsing, searching, and watching your archive.
 
-![Kapsel watch page showing an archived video](docs/kapsel-watch-screenshot.jpg)
+![Yummle watch page showing an archived video](docs/kapsel-watch-screenshot.jpg)
 
 ## Features
 
@@ -11,17 +11,15 @@ Yummle is a fork of Kapsel with a few extra features. Kapsel is a small self-hos
 - Browse videos, channels, playlists, watched state, and playback progress.
 - Add and Remove channels.
 - Add and Remove playlists.
-- Playlist and Channel subscriptions.csv import.
+- Playlist and Channel .csv import.
 - Search local metadata with SQLite FTS, including imported titles, descriptions, subtitles, and comments.
-- Import core TubeArchivist backup data.
 - Back up and restore SQLite metadata separately from large media files.
-- Inspect storage use and clean orphaned files conservatively.
 - Update yt-dlp to nightly automatically.
 - Deploy as docker container with various .env tweaks.
 
 ## Requirements
 
-At runtime Kapsel needs:
+At runtime Yummle needs:
 
 - A Kapsel binary.
 - A writable data directory for SQLite and runtime state.
@@ -29,7 +27,7 @@ At runtime Kapsel needs:
 - `yt-dlp` for downloads and channel scans.
 - `ffmpeg` for timeline previews and media-derived assets.
 
-The release binary embeds the web UI, so Go, Node, pnpm, and Vite are not needed on the machine that runs Kapsel.
+The release binary embeds the web UI, so Go, Node, pnpm, and Vite are not needed on the machine that runs Yummle.
 
 ## Quick Start
 
@@ -59,7 +57,7 @@ For a systemd-style local deployment, see [`docs/deployment.md`](docs/deployment
 
 ## Configuration
 
-Kapsel is configured with environment variables. Start from [`deploy/kapsel.env.example`](deploy/kapsel.env.example) for a service install.
+A Yummle Kapsel is configured with environment variables. Start from [`deploy/kapsel.env.example`](deploy/kapsel.env.example) for a service install.
 
 Common settings:
 
@@ -137,19 +135,9 @@ curl -X POST http://127.0.0.1:8080/api/channels \
 
 If auth is enabled, authenticate in the browser first or provide the session cookie to API requests.
 
-## Importing TubeArchivist Data
-
-Kapsel can import core metadata from TubeArchivist backups:
-
-```sh
-./dist/kapsel import-ta /path/to/tubearchivist
-```
-
-The importer reads TubeArchivist backup JSON from `cache/backup`, `backup`, or the provided root directory. It imports channels, videos, playlists, comments, search text, playback progress, and media references where available.
-
 ## Importing Subscriptions
 
-Kapsel can add a list of channels from a Google Takeout `subscriptions.csv` export, queueing the channel-first download flow for each channel:
+Yummle can add a list of channels from a Takeout format `subscriptions.csv` export, queueing the channel-first download flow for each channel:
 
 ```sh
 ./dist/kapsel import-subscriptions /path/to/subscriptions.csv
