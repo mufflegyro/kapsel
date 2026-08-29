@@ -26,6 +26,7 @@
   const cinemaModeStorageKey = 'kapsel.cinemaMode';
   const volumeNormalizationStorageKey = 'kapsel.volumeNormalization';
   const captionModeStorageKey = 'kapsel.captions';
+  const homeVideoSortStorageKey = 'kapsel.homeVideoSort';
   const liveJobsPageRefreshDelay = 250;
   const liveJobsPageRetryDelay = 3000;
   const jobStatusFilters = [
@@ -309,8 +310,26 @@
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }
 
-  function defaultVideoSortForPath(routePath) {
+  function savedHomeVideoSort() {
+    try {
+      const value = window.localStorage.getItem(homeVideoSortStorageKey);
+      return videoSortOptions.some(option => option.value === value) ? value : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function originalVideoSortForPath(routePath) {
     return routePath === '/' ? 'watching' : 'newest';
+  }
+
+  function defaultVideoSortForPath(routePath) {
+    if (routePath === '/') {
+      // The last sort the user manually picked on the home page sticks until
+      // they choose a different one.
+      return savedHomeVideoSort() || originalVideoSortForPath(routePath);
+    }
+    return originalVideoSortForPath(routePath);
   }
 
   function videoSortFromSearch(search, fallback = 'newest') {
@@ -321,8 +340,15 @@
   }
 
   function setVideoSort(value) {
+    if (path === '/') {
+      try {
+        window.localStorage.setItem(homeVideoSortStorageKey, value);
+      } catch {
+        // Storage can be unavailable in private or locked-down browsing contexts.
+      }
+    }
     const params = new URLSearchParams(locationSearch);
-    if (value && value !== defaultVideoSortForPath(path)) {
+    if (value && value !== originalVideoSortForPath(path)) {
       params.set('sort', value);
     } else {
       params.delete('sort');

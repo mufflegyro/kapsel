@@ -218,6 +218,28 @@ test('home For You empty state points to explicit sorts', async ({ page }) => {
   await expect(page.getByTestId('video-card').filter({ hasText: 'Watched Home Video' })).toBeVisible();
 });
 
+test('home sort selection sticks across navigation back to the home page', async ({ page }) => {
+  const homeSortRequests = [];
+  await page.route('**/api/home/videos?*', route => {
+    homeSortRequests.push(new URL(route.request().url()).searchParams.get('sort'));
+    return route.continue();
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel('Sort by')).toHaveValue('watching');
+
+  await page.getByLabel('Sort by').selectOption('downloaded');
+  await expect(page).toHaveURL(/sort=downloaded/);
+
+  // Leaving and returning to a bare "/" URL (no ?sort param) must not reset
+  // the user's manually chosen sort back to For You.
+  await page.goto('/channels');
+  await page.goto('/');
+
+  await expect(page.getByLabel('Sort by')).toHaveValue('downloaded');
+  await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('downloaded');
+});
+
 test('home browse chrome shows feed position, aligned titles, and quieter explore links', async ({ page }) => {
   const videos = [
     {
