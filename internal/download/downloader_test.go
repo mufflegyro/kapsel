@@ -3799,7 +3799,7 @@ VALUES ('importold7', 'youtube', 'importold7', ?, 'succeeded', ?, '{}', ?, ?)`, 
 	}
 }
 
-func TestAutoDownloadRetentionRemovesWatchedAutoMediaAfterOneDay(t *testing.T) {
+func TestAutoDownloadRetentionRemovesWatchedMediaOfAnyOriginAfterOneDay(t *testing.T) {
 	t.Parallel()
 
 	db := openDownloadDB(t)
@@ -3810,6 +3810,7 @@ func TestAutoDownloadRetentionRemovesWatchedAutoMediaAfterOneDay(t *testing.T) {
 		"videos/old-keep-watched.mp4",
 		"videos/manual-watched.mp4",
 		"videos/imported-watched.mp4",
+		"videos/orphan-watched.mp4",
 	)
 	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
 		t.Fatal(err)
@@ -3824,6 +3825,14 @@ func TestAutoDownloadRetentionRemovesWatchedAutoMediaAfterOneDay(t *testing.T) {
 	seedRetentionVideo(t, db, "keepwatch3", "2026-05-02", "videos/old-keep-watched.mp4", DownloadOriginChannelAuto, downloadedAt)
 	seedRetentionVideo(t, db, "manualwat4", "2026-05-01", "videos/manual-watched.mp4", DownloadOriginManual, downloadedAt)
 	seedImportedRetentionVideo(t, db, "importwat5", "2026-04-30", "videos/imported-watched.mp4", downloadedAt)
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, title, published_at, duration_seconds, media_path, media_origin, media_downloaded_at, archived_at, watched, updated_at)
+VALUES ('orphanwat6', 'orphanwat6', 'Video orphanwat6', '2026-04-28', 120, 'videos/orphan-watched.mp4', ?, ?, ?, 1, ?)`, DownloadOriginManual, downloadedAt, downloadedAt, oldWatchedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO media_assets (owner_type, owner_id, kind, path) VALUES ('video', 'orphanwat6', 'media', 'videos/orphan-watched.mp4')"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec("UPDATE videos SET watched = 1, updated_at = ? WHERE id IN ('recentwatch', 'oldvwatch1', 'keepwatch3', 'manualwat4', 'importwat5')", oldWatchedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -3841,20 +3850,151 @@ func TestAutoDownloadRetentionRemovesWatchedAutoMediaAfterOneDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Removed != 2 || result.Checked != 2 {
-		t.Fatalf("expected two old watched auto removals, got %#v", result)
+	if result.Removed != 5 || result.Checked != 5 {
+		t.Fatalf("expected five old watched removals across origins, got %#v", result)
 	}
-	for _, id := range []string{"oldvwatch1", "oldpwatch2"} {
+	for _, id := range []string{"oldvwatch1", "oldpwatch2", "manualwat4", "importwat5", "orphanwat6"} {
 		assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", id)
 		assertScalar(t, db, "SELECT media_origin FROM videos WHERE id = ?", MediaOriginImported, id)
+		assertScalar(t, db, "SELECT count(*) FROM media_assets WHERE owner_type = 'video' AND owner_id = ? AND kind = 'media'", int64(0), id)
 	}
-	for _, path := range []string{"old-video-watched.mp4", "old-progress-watched.mp4"} {
+	for _, path := range []string{"old-video-watched.mp4", "old-progress-watched.mp4", "manual-watched.mp4", "imported-watched.mp4", "orphan-watched.mp4"} {
 		if _, err := os.Stat(filepath.Join(mediaRoot, "videos", path)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("expected watched media file %s to be removed, got %v", path, err)
 		}
 	}
-	for _, id := range []string{"recentwatch", "keepwatch3", "manualwat4", "importwat5"} {
+	for _, id := range []string{"recentwatch", "keepwatch3"} {
 		assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), id)
+	}
+}
+
+func TestAutoDownloadRetentionKeepsUnwatchedAndProtectedMediaOfAnyOrigin(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t,
+		"videos/manual-unwatched.mp4",
+		"videos/imported-unwatched.mp4",
+		"videos/manual-started.mp4",
+		"videos/manual-keep-watched.mp4",
+		"videos/manual-recent-watched.mp4",
+		"videos/imported-recent-watched.mp4",
+	)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	downloadedAt := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
+	recentWatchedAt := now.Add(-23 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "manualkeep1", "2026-05-05", "videos/manual-keep-watched.mp4", DownloadOriginManual, downloadedAt)
+	seedRetentionVideo(t, db, "manualunwt2", "2026-05-04", "videos/manual-unwatched.mp4", DownloadOriginManual, downloadedAt)
+	seedImportedRetentionVideo(t, db, "importunwt3", "2026-05-03", "videos/imported-unwatched.mp4", downloadedAt)
+	seedRetentionVideo(t, db, "manualstrt4", "2026-05-02", "videos/manual-started.mp4", DownloadOriginManual, downloadedAt)
+	seedRetentionVideo(t, db, "manualrecw5", "2026-05-01", "videos/manual-recent-watched.mp4", DownloadOriginManual, downloadedAt)
+	seedImportedRetentionVideo(t, db, "importrecw6", "2026-04-30", "videos/imported-recent-watched.mp4", downloadedAt)
+	if _, err := db.Exec("UPDATE videos SET keep_forever = 1 WHERE id = 'manualkeep1'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO user_progress (video_id, position_seconds, duration_seconds, watched, updated_at) VALUES ('manualstrt4', 12, 120, 0, ?)", downloadedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE videos SET watched = 1, updated_at = ? WHERE id IN ('manualrecw5', 'importrecw6')", recentWatchedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewDownloader(db, Config{MediaRoot: mediaRoot}, nil).ApplyAutoDownloadRetention(context.Background(), RetentionOptions{Now: func() time.Time { return now }, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 0 || result.Checked != 0 {
+		t.Fatalf("expected no candidates for unwatched, in-progress, protected, or recently watched media, got %#v", result)
+	}
+	for _, id := range []string{"manualkeep1", "manualunwt2", "importunwt3", "manualstrt4", "manualrecw5", "importrecw6"} {
+		assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), id)
+	}
+}
+
+func TestAutoDownloadRetentionWatchedCleanupDisabled(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t,
+		"videos/watched-manual.mp4",
+		"videos/auto-one.mp4",
+		"videos/auto-two.mp4",
+		"videos/stale-auto.mp4",
+	)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	oldWatchedAt := now.Add(-25 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "autorank001", "2026-05-06", "videos/auto-one.mp4", DownloadOriginChannelAuto, old)
+	seedRetentionVideo(t, db, "autorank002", "2026-05-05", "videos/auto-two.mp4", DownloadOriginChannelAuto, old)
+	seedRetentionVideo(t, db, "staleauto03", "2026-05-04", "videos/stale-auto.mp4", DownloadOriginChannelAuto, old)
+	seedRetentionVideo(t, db, "watchmanual1", "2026-05-03", "videos/watched-manual.mp4", DownloadOriginManual, old)
+	if _, err := db.Exec("UPDATE videos SET watched = 1, updated_at = ? WHERE id = 'watchmanual1'", oldWatchedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewDownloader(db, Config{MediaRoot: mediaRoot, RetentionWatchedCleanupDisabled: true}, nil).ApplyAutoDownloadRetention(context.Background(), RetentionOptions{Now: func() time.Time { return now }, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 1 || result.Checked != 1 {
+		t.Fatalf("expected only the stale auto removal while watched cleanup is disabled, got %#v", result)
+	}
+	assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), "watchmanual1")
+	assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", "staleauto03")
+	if _, err := os.Stat(filepath.Join(mediaRoot, "videos", "watched-manual.mp4")); err != nil {
+		t.Fatalf("expected watched manual media to remain while cleanup is disabled, got %v", err)
+	}
+}
+
+func TestRetentionJobHonorsWatchedCleanupDisabledConfig(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	mediaRoot := writeDownloadFiles(t, "videos/watched-job.mp4")
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339Nano)
+	oldWatchedAt := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "watchjob001", "2026-05-01", "videos/watched-job.mp4", DownloadOriginManual, old)
+	if _, err := db.Exec("UPDATE videos SET watched = 1, updated_at = ? WHERE id = 'watchjob001'", oldWatchedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	runJob := func(downloader *Downloader) {
+		t.Helper()
+		job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{Type: RetentionJobType, PayloadJSON: `{}`, MaxAttempts: 1, RunAfter: time.Now().Add(-time.Second)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner := jobs.NewRunner(store, map[string]jobs.Handler{
+			RetentionJobType: downloader.HandleRetention,
+		})
+		if err := runner.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := store.Get(context.Background(), job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != jobs.StatusSucceeded {
+			t.Fatalf("expected succeeded retention job, got %#v", stored)
+		}
+	}
+
+	runJob(newTestDownloader(db, store, Config{MediaRoot: mediaRoot, RetentionWatchedCleanupDisabled: true}, nil))
+	assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), "watchjob001")
+	runJob(newTestDownloader(db, store, Config{MediaRoot: mediaRoot}, nil))
+	assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", "watchjob001")
+	if _, err := os.Stat(filepath.Join(mediaRoot, "videos", "watched-job.mp4")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected watched manual media to be removed once cleanup is enabled, got %v", err)
 	}
 }
 
@@ -3882,6 +4022,7 @@ func TestAutoDownloadRetentionRechecksWatchedCutoffBeforeDelete(t *testing.T) {
 		VideoID:       "rewatched1",
 		MediaPath:     "videos/rewatched.mp4",
 		DownloadedAt:  downloadedAt,
+		MediaOrigin:   DownloadOriginChannelAuto,
 		StaleCutoff:   now.Add(-DefaultRetentionStaleAfter).Format(time.RFC3339Nano),
 		WatchedCutoff: now.Add(-DefaultRetentionWatchedAfter).Format(time.RFC3339Nano),
 	})
@@ -3912,7 +4053,7 @@ func TestAutoDownloadRetentionSkipsCandidateMarkedKeepForeverBeforeDelete(t *tes
 		t.Fatal(err)
 	}
 
-	removed, err := NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), retentionCandidate{VideoID: "protected01", MediaPath: "videos/protected.mp4", DownloadedAt: old})
+	removed, err := NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), retentionCandidate{VideoID: "protected01", MediaPath: "videos/protected.mp4", DownloadedAt: old, MediaOrigin: DownloadOriginChannelAuto})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3940,7 +4081,7 @@ func TestAutoDownloadRetentionRechecksMediaOwnershipBeforeDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), retentionCandidate{VideoID: "manualnow1", MediaPath: "videos/manual-now.mp4", DownloadedAt: old})
+	removed, err := NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), retentionCandidate{VideoID: "manualnow1", MediaPath: "videos/manual-now.mp4", DownloadedAt: old, MediaOrigin: DownloadOriginChannelAuto})
 	if err != nil {
 		t.Fatal(err)
 	}

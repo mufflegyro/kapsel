@@ -116,9 +116,12 @@ type Config struct {
 	FFMPEGPath         string
 	PreviewRunner      previews.Runner
 	JobStore           *jobs.Store
-	ytdlpSleep         func(context.Context, time.Duration) error
-	ytdlpSleepJitter   func(time.Duration) time.Duration
-	ytdlpNow           func() time.Time
+	// RetentionWatchedCleanupDisabled opts out of watched-media retention
+	// (KAPSEL_RETENTION_WATCHED_AFTER=0s).
+	RetentionWatchedCleanupDisabled bool
+	ytdlpSleep                      func(context.Context, time.Duration) error
+	ytdlpSleepJitter                func(time.Duration) time.Duration
+	ytdlpNow                        func() time.Time
 }
 
 type Command struct {
@@ -765,7 +768,10 @@ type RetentionOptions struct {
 	Now          func() time.Time
 	StaleAfter   time.Duration
 	WatchedAfter time.Duration
-	Limit        int
+	// WatchedCleanupDisabled turns off removal of watched media entirely;
+	// only the stale channel-auto rule then applies.
+	WatchedCleanupDisabled bool
+	Limit                  int
 }
 
 type RetentionResult struct {
@@ -1440,7 +1446,8 @@ func (d *Downloader) HandleRetention(ctx context.Context, job jobs.Job) error {
 	if err := d.requireJobStoreForJob(job); err != nil {
 		return err
 	}
-	result, err := d.ApplyAutoDownloadRetention(ctx, RetentionOptions{})
+	options := RetentionOptions{}
+	result, err := d.ApplyAutoDownloadRetention(ctx, options)
 	if err != nil {
 		if result.Checked > 0 || result.Removed > 0 {
 			_ = d.setPartialJobResult(ctx, job.ID, result)
@@ -2621,6 +2628,8 @@ SELECT EXISTS(
 }
 
 func (d *Downloader) ApplyAutoDownloadRetention(ctx context.Context, options RetentionOptions) (RetentionResult, error) {
+	// The operator-level opt-out cannot be re-enabled per call.
+	options.WatchedCleanupDisabled = options.WatchedCleanupDisabled || d.config.RetentionWatchedCleanupDisabled
 	return NewRetentionCleaner(d.db, d.config.MediaRoot).Apply(ctx, options)
 }
 

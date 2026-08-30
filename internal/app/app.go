@@ -63,7 +63,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	jobStore := jobs.NewStore(db)
 	authManager := auth.NewManager(auth.Config{Enabled: cfg.AuthMode != "disabled", Username: cfg.AuthUsername, PasswordHash: cfg.AuthPasswordHash, SessionSecret: cfg.SessionSecret, SessionTTL: cfg.SessionTTL, CookieSecure: cfg.SessionCookieSecure})
-	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore}, nil)
+	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore, RetentionWatchedCleanupDisabled: cfg.RetentionWatchedAfter == 0}, nil)
 	updaterService := updater.New(db, jobStore, updater.Config{
 		Repo:           cfg.UpdateRepo,
 		CurrentVersion: version.Version,

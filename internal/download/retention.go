@@ -22,6 +22,7 @@ type retentionCandidate struct {
 	VideoID       string
 	MediaPath     string
 	DownloadedAt  string
+	MediaOrigin   string
 	StaleCutoff   string
 	WatchedCutoff string
 }
@@ -55,7 +56,13 @@ func (c *RetentionCleaner) Apply(ctx context.Context, options RetentionOptions) 
 	}
 	now := nowFunc().UTC()
 	staleCutoff := now.Add(-staleAfter).Format(time.RFC3339Nano)
-	watchedCutoff := now.Add(-watchedAfter).Format(time.RFC3339Nano)
+	// An empty watched cutoff disables the watched branch: watched_at is never
+	// empty for watched rows, so "watched_at <> '' AND watched_at <= ''" matches
+	// nothing. The stale branch keeps its own cutoff either way.
+	watchedCutoff := ""
+	if !options.WatchedCleanupDisabled {
+		watchedCutoff = now.Add(-watchedAfter).Format(time.RFC3339Nano)
+	}
 	candidates, err := c.retentionCandidates(ctx, staleCutoff, watchedCutoff, limit)
 	if err != nil {
 		return RetentionResult{}, err
@@ -77,6 +84,11 @@ func (c *RetentionCleaner) Apply(ctx context.Context, options RetentionOptions) 
 	return result, nil
 }
 
+// retentionCandidates selects media eligible for cleanup. Watched videos are
+// always eligible once the watched grace has passed, regardless of media origin
+// or channel download rank; keep_forever is the only protection. The stale
+// branch additionally removes unstarted channel-auto media beyond the newest 2
+// per channel.
 func (c *RetentionCleaner) retentionCandidates(ctx context.Context, staleCutoff string, watchedCutoff string, limit int) ([]retentionCandidate, error) {
 	rows, err := c.db.QueryContext(ctx, `
 WITH ranked_auto_downloads AS (
@@ -84,15 +96,11 @@ WITH ranked_auto_downloads AS (
 	    v.id,
 	    v.media_path,
 	    v.media_downloaded_at AS downloaded_at,
+	    v.media_origin AS media_origin,
 		COALESCE(up.position_seconds, 0) AS position_seconds,
 		COALESCE(up.watched, 0) AS progress_watched,
 		v.watched AS video_watched,
 		v.keep_forever AS keep_forever,
-		CASE
-		  WHEN COALESCE(up.watched, 0) = 1 THEN COALESCE(NULLIF(up.updated_at, ''), NULLIF(v.updated_at, ''), v.media_downloaded_at)
-		  WHEN v.watched = 1 THEN COALESCE(NULLIF(v.updated_at, ''), NULLIF(up.updated_at, ''), v.media_downloaded_at)
-		  ELSE ''
-		END AS watched_at,
 		ROW_NUMBER() OVER (
       PARTITION BY v.channel_id
       ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') DESC, v.id DESC
@@ -103,20 +111,39 @@ WITH ranked_auto_downloads AS (
 	    AND v.media_path <> ''
 	    AND v.media_origin = ?
 	    AND v.media_downloaded_at <> ''
+),
+watched_with_media AS (
+  SELECT
+    v.id,
+    v.media_path,
+    v.media_downloaded_at AS downloaded_at,
+    v.media_origin AS media_origin,
+    CASE
+      WHEN COALESCE(up.watched, 0) = 1 THEN COALESCE(NULLIF(up.updated_at, ''), NULLIF(v.updated_at, ''), v.media_downloaded_at)
+      WHEN v.watched = 1 THEN COALESCE(NULLIF(v.updated_at, ''), NULLIF(up.updated_at, ''), v.media_downloaded_at)
+      ELSE ''
+    END AS watched_at
+  FROM videos v
+  LEFT JOIN user_progress up ON up.video_id = v.id
+  WHERE v.media_path <> ''
+    AND v.media_downloaded_at <> ''
+    AND v.keep_forever = 0
 )
-SELECT id, media_path, downloaded_at
-FROM ranked_auto_downloads
-WHERE keep_forever = 0
-  AND (
-    ((progress_watched = 1 OR video_watched = 1) AND watched_at <> '' AND watched_at <= ?)
-    OR (
-      channel_download_rank > 2
-      AND position_seconds = 0
-      AND progress_watched = 0
-      AND video_watched = 0
-      AND downloaded_at <= ?
-    )
-  )
+SELECT id, media_path, downloaded_at, media_origin
+FROM (
+  SELECT id, media_path, downloaded_at, media_origin
+  FROM watched_with_media
+  WHERE watched_at <> '' AND watched_at <= ?
+  UNION
+  SELECT id, media_path, downloaded_at, media_origin
+  FROM ranked_auto_downloads
+  WHERE keep_forever = 0
+    AND channel_download_rank > 2
+    AND position_seconds = 0
+    AND progress_watched = 0
+    AND video_watched = 0
+    AND downloaded_at <= ?
+)
 ORDER BY downloaded_at ASC, id ASC
 LIMIT ?`, DownloadOriginChannelAuto, watchedCutoff, staleCutoff, limit)
 	if err != nil {
@@ -127,7 +154,7 @@ LIMIT ?`, DownloadOriginChannelAuto, watchedCutoff, staleCutoff, limit)
 	candidates := []retentionCandidate{}
 	for rows.Next() {
 		var candidate retentionCandidate
-		if err := rows.Scan(&candidate.VideoID, &candidate.MediaPath, &candidate.DownloadedAt); err != nil {
+		if err := rows.Scan(&candidate.VideoID, &candidate.MediaPath, &candidate.DownloadedAt, &candidate.MediaOrigin); err != nil {
 			return nil, err
 		}
 		candidate.StaleCutoff = staleCutoff
@@ -164,7 +191,7 @@ func (c *RetentionCleaner) removeRetainedVideoMedia(ctx context.Context, candida
 		return false, err
 	}
 	defer tx.Rollback()
-	if candidate.StaleCutoff != "" && candidate.WatchedCutoff != "" {
+	if candidate.StaleCutoff != "" {
 		eligible, err := retentionCandidateStillEligible(ctx, tx, candidate)
 		if err != nil {
 			return false, err
@@ -174,7 +201,7 @@ func (c *RetentionCleaner) removeRetainedVideoMedia(ctx context.Context, candida
 		}
 	}
 
-	update, err := tx.ExecContext(ctx, "UPDATE videos SET media_path = '', media_origin = 'imported', media_downloaded_at = '', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND media_path = ? AND media_origin = ? AND media_downloaded_at = ? AND keep_forever = 0", candidate.VideoID, candidate.MediaPath, DownloadOriginChannelAuto, candidate.DownloadedAt)
+	update, err := tx.ExecContext(ctx, "UPDATE videos SET media_path = '', media_origin = 'imported', media_downloaded_at = '', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND media_path = ? AND media_origin = ? AND media_downloaded_at = ? AND keep_forever = 0", candidate.VideoID, candidate.MediaPath, candidate.MediaOrigin, candidate.DownloadedAt)
 	if err != nil {
 		return false, err
 	}
@@ -209,15 +236,11 @@ WITH ranked_auto_downloads AS (
     v.id,
     v.media_path,
     v.media_downloaded_at AS downloaded_at,
+    v.media_origin AS media_origin,
     COALESCE(up.position_seconds, 0) AS position_seconds,
     COALESCE(up.watched, 0) AS progress_watched,
     v.watched AS video_watched,
     v.keep_forever AS keep_forever,
-    CASE
-      WHEN COALESCE(up.watched, 0) = 1 THEN COALESCE(NULLIF(up.updated_at, ''), NULLIF(v.updated_at, ''), v.media_downloaded_at)
-      WHEN v.watched = 1 THEN COALESCE(NULLIF(v.updated_at, ''), NULLIF(up.updated_at, ''), v.media_downloaded_at)
-      ELSE ''
-    END AS watched_at,
     ROW_NUMBER() OVER (
       PARTITION BY v.channel_id
       ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') DESC, v.id DESC
@@ -228,25 +251,45 @@ WITH ranked_auto_downloads AS (
     AND v.media_path <> ''
     AND v.media_origin = ?
     AND v.media_downloaded_at <> ''
+),
+watched_with_media AS (
+  SELECT
+    v.id,
+    v.media_path,
+    v.media_downloaded_at AS downloaded_at,
+    v.media_origin AS media_origin,
+    CASE
+      WHEN COALESCE(up.watched, 0) = 1 THEN COALESCE(NULLIF(up.updated_at, ''), NULLIF(v.updated_at, ''), v.media_downloaded_at)
+      WHEN v.watched = 1 THEN COALESCE(NULLIF(v.updated_at, ''), NULLIF(up.updated_at, ''), v.media_downloaded_at)
+      ELSE ''
+    END AS watched_at
+  FROM videos v
+  LEFT JOIN user_progress up ON up.video_id = v.id
+  WHERE v.media_path <> ''
+    AND v.media_downloaded_at <> ''
+    AND v.keep_forever = 0
 )
 SELECT EXISTS(
   SELECT 1
-  FROM ranked_auto_downloads
+  FROM (
+    SELECT id, media_path, downloaded_at, media_origin
+    FROM watched_with_media
+    WHERE watched_at <> '' AND watched_at <= ?
+    UNION
+    SELECT id, media_path, downloaded_at, media_origin
+    FROM ranked_auto_downloads
+    WHERE keep_forever = 0
+      AND channel_download_rank > 2
+      AND position_seconds = 0
+      AND progress_watched = 0
+      AND video_watched = 0
+      AND downloaded_at <= ?
+  )
   WHERE id = ?
     AND media_path = ?
     AND downloaded_at = ?
-    AND keep_forever = 0
-    AND (
-      ((progress_watched = 1 OR video_watched = 1) AND watched_at <> '' AND watched_at <= ?)
-      OR (
-        channel_download_rank > 2
-        AND position_seconds = 0
-        AND progress_watched = 0
-        AND video_watched = 0
-        AND downloaded_at <= ?
-      )
-    )
-)`, DownloadOriginChannelAuto, candidate.VideoID, candidate.MediaPath, candidate.DownloadedAt, candidate.WatchedCutoff, candidate.StaleCutoff).Scan(&eligible)
+    AND media_origin = ?
+)`, DownloadOriginChannelAuto, candidate.WatchedCutoff, candidate.StaleCutoff, candidate.VideoID, candidate.MediaPath, candidate.DownloadedAt, candidate.MediaOrigin).Scan(&eligible)
 
 	return eligible, err
 }
