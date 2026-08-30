@@ -1,4 +1,5 @@
 - [x] [Add hide watched checkbox to the sort toolbar](issues/add-hide-watched-checkbox.md)
+- [ ] [Fix flaky catalog download success refresh e2e test](issues/fix-flaky-catalog-download-success-refresh-e2e-test.md)
 - [ ] [Upload a playlist CSV from the playlist page](issues/upload-playlist-csv-via-ui.md)
 - [ ] [Import a YouTube playlist by link from the playlist page](issues/import-playlist-by-url.md)
 - [ ] [Sandbox external media tools](issues/sandbox-external-media-tools.md)
