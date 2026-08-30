@@ -30,4 +30,12 @@ run = "pnpm --dir frontend browser-smoke:install"
 
 [tasks.release-build]
 description = "Build embedded frontend assets and a release binary"
-run = "pnpm --dir frontend build && mkdir -p dist && go build -trimpath -ldflags='-s -w' -o dist/kapsel ./cmd/kapsel"
+run = """
+pnpm --dir frontend build
+mkdir -p dist
+version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+echo "building kapsel version=$version"
+# CGO_ENABLED=0 keeps the release binary statically linked — same as the
+# Docker image and the CI release artifacts.
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X kapsel/internal/version.Version=$version" -o dist/kapsel ./cmd/kapsel
+"""

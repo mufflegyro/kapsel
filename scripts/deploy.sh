@@ -85,12 +85,17 @@ if [[ "$MODE" != "build-only" ]]; then
 fi
 
 # ---- 2. rebuild + restart on remote host ---------------------------------
+# Stamp the image's kapsel version from the local checkout: the remote build
+# context is a minimal rsync without .git, so capture `git describe` here and
+# pass it through compose's KAPSEL_VERSION build arg.
+KAPSEL_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+export KAPSEL_VERSION
 if [[ "$MODE" != "push-only" ]]; then
   if [[ -n "${DRY_RUN:-}" ]]; then
-    info "dry-run: would run on ${HOST}: cd ${REMOTE_PATH} && docker compose up -d --build"
+    info "dry-run: would run on ${HOST}: cd ${REMOTE_PATH} && KAPSEL_VERSION='${KAPSEL_VERSION}' docker compose up -d --build"
   else
-    info "rebuilding and restarting on ${HOST}..."
-    ssh "$HOST" -- "cd '${REMOTE_PATH}' && docker compose up -d --build" || fail "remote build failed"
+    info "rebuilding and restarting on ${HOST} (version ${KAPSEL_VERSION})..."
+    ssh "$HOST" -- "cd '${REMOTE_PATH}' && KAPSEL_VERSION='${KAPSEL_VERSION}' docker compose up -d --build" || fail "remote build failed"
     info "rebuild and restart complete"
   fi
 fi

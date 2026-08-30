@@ -22,6 +22,12 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile
+      args:
+        # Passed through from the build environment (scripts/deploy.sh sets it
+        # from `git describe`). Empty means the binary reports dev, which
+        # simply disables in-app update checks — the container is updated by
+        # pulling/rebuilding the image, not by self-update.
+        KAPSEL_VERSION: ${KAPSEL_VERSION:-}
     image: kapsel:local
     restart: unless-stopped
     env_file:

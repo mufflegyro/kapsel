@@ -34,6 +34,11 @@ RUN pnpm build
 # ---------------------------------------------------------------------------
 FROM golang:1.26-bookworm AS build
 
+# Release version stamped into the binary (shown in Settings; update checks
+# compare it against GitHub release tags). Empty leaves the dev marker, which
+# disables self-update in checkout-built binaries.
+ARG KAPSEL_VERSION=""
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -44,7 +49,12 @@ COPY internal/ ./internal/
 COPY --from=frontend /src/internal/web/static ./internal/web/static
 
 # modernc.org/sqlite is pure Go, so a static binary needs no cgo.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/kapsel ./cmd/kapsel
+# Note: this Docker image is updated by pulling a new image, not through the
+# in-app updater — /opt-style root ownership aside, container binaries are
+# replaced by image rebuilds, and KAPSEL_VERSION stamps that image.
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X kapsel/internal/version.Version=${KAPSEL_VERSION}" \
+    -o /out/kapsel ./cmd/kapsel
 
 # ---------------------------------------------------------------------------
 # Stage 3: runtime
@@ -121,7 +131,8 @@ ENV KAPSEL_ADDR=:8080 \
     KAPSEL_YTDLP_PATH=/usr/local/bin/kapsel-ytdlp \
     KAPSEL_YTDLP_UPDATE_INTERVAL=24h \
     KAPSEL_FFMPEG_PATH=/usr/bin/ffmpeg \
-    KAPSEL_AUTH_MODE=required
+    KAPSEL_AUTH_MODE=required \
+    KAPSEL_UPDATE_CHECK_INTERVAL=0s
 
 EXPOSE 8080
 
