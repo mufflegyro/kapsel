@@ -123,9 +123,11 @@ jobs:
           # release body; otherwise GitHub generates notes from commits.
           # If the release already exists (the tag was re-pointed to fix
           # release metadata) update it in place instead of failing.
+          # Deleting a tag turns its release into a draft, so the edit
+          # path also re-publishes it.
           notes_file="release-notes/$GITHUB_REF_NAME.md"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            edit_args=(--title "Yummle $GITHUB_REF_NAME")
+            edit_args=(--title "Yummle $GITHUB_REF_NAME" --draft=false)
             if [ -f "$notes_file" ]; then
               edit_args+=(--notes-file "$notes_file")
             fi
