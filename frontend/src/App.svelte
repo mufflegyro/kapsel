@@ -33,6 +33,7 @@
   const volumeNormalizationStorageKey = 'kapsel.volumeNormalization';
   const captionModeStorageKey = 'kapsel.captions';
   const homeVideoSortStorageKey = 'kapsel.homeVideoSort';
+  const homeHideWatchedStorageKey = 'kapsel.homeHideWatched';
   const liveJobsPageRefreshDelay = 250;
   const liveJobsPageRetryDelay = 3000;
   const jobStatusFilters = [
@@ -128,6 +129,7 @@
   let homeArchiveState = 'unknown';
   let searchInput = new URLSearchParams(locationSearch).get('q') ?? '';
   let librarySort = videoSortFromSearch(locationSearch);
+  let libraryHideWatched = hideWatchedFromSearch(locationSearch, defaultHideWatchedForPath(path));
   let channelURL = '';
   let videoURL = '';
   let quickQueueOpen = false;
@@ -199,6 +201,7 @@
   $: playlistID = playlistIDFromPath(path);
   $: searchQuery = path === '/search' ? new URLSearchParams(locationSearch).get('q')?.trim() ?? '' : '';
   $: librarySort = videoSortFromSearch(locationSearch, defaultVideoSortForPath(path));
+  $: libraryHideWatched = hideWatchedFromSearch(locationSearch, defaultHideWatchedForPath(path));
   $: routeKey = `${path}${locationSearch}`;
   $: pageTitle = pageTitleForRoute();
   $: libraryFeedSummary = libraryFeedCountLabel(library.videos.length, library.pagination?.total);
@@ -328,6 +331,31 @@
     }
   }
 
+  function savedHomeHideWatched() {
+    try {
+      return window.localStorage.getItem(homeHideWatchedStorageKey) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function defaultHideWatchedForPath(routePath) {
+    if (routePath === '/') {
+      // The last hide-watched choice on the home page sticks until the user
+      // changes it, mirroring the sticky home video sort.
+      return savedHomeHideWatched();
+    }
+    return false;
+  }
+
+  function hideWatchedFromSearch(search, fallback = false) {
+    // Mirrors the server's hideWatchedParam() accepted truthy spellings.
+    const value = new URLSearchParams(search).get('hide_watched');
+    if (value === '1' || value === 'true' || value === 'yes') return true;
+    if (value === '0' || value === 'false') return false;
+    return fallback;
+  }
+
   function originalVideoSortForPath(routePath) {
     return routePath === '/' ? 'watching' : 'newest';
   }
@@ -377,12 +405,43 @@
     setRoute(`${path}${nextSearch}`);
   }
 
+  function setHideWatched(value) {
+    if (path === '/') {
+      try {
+        window.localStorage.setItem(homeHideWatchedStorageKey, value ? '1' : '0');
+      } catch {
+        // Storage can be unavailable in private or locked-down browsing contexts.
+      }
+    }
+    const params = new URLSearchParams(locationSearch);
+    if (value) {
+      params.set('hide_watched', '1');
+    } else {
+      params.delete('hide_watched');
+    }
+    const query = params.toString();
+    const nextSearch = query ? `?${query}` : '';
+    if (nextSearch === locationSearch) {
+      // The URL already reflects this choice, so no route change fires.
+      // Sync the displayed toggle and refresh the list directly.
+      libraryHideWatched = value;
+      if (path === '/') {
+        loadLibrary({ showLoading: false });
+      } else if (channelID) {
+        loadChannel(channelID);
+      }
+      return;
+    }
+    setRoute(`${path}${nextSearch}`);
+  }
+
   async function loadLibrary(options = {}) {
     const requestToken = ++libraryRequestToken;
     const progressInvalidationVersion = playbackProgressInvalidation.version;
     const page = options.page ?? 1;
     const append = options.append === true && page > 1;
     const sort = options.sort ?? videoSortFromSearch(locationSearch, defaultVideoSortForPath(path));
+    const hideWatched = options.hideWatched ?? hideWatchedFromSearch(locationSearch, defaultHideWatchedForPath(path));
     if (append) {
       library = { ...library, refreshing: false, loadingMore: true, loadMoreError: '', error: '' };
     } else if (options.showLoading !== false) {
@@ -391,7 +450,7 @@
       library = { ...library, refreshing: true, loadingMore: false, loadMoreError: '', error: '' };
     }
     try {
-      const response = await fetchJSON(`/api/home/videos?page=${page}&page_size=${libraryPageSize}&sort=${encodeURIComponent(sort)}`);
+      const response = await fetchJSON(`/api/home/videos?page=${page}&page_size=${libraryPageSize}&sort=${encodeURIComponent(sort)}${hideWatched ? '&hide_watched=1' : ''}`);
       if (requestToken !== libraryRequestToken) return;
       const responseVideos = response.data ?? [];
       const existingVideoIDs = new Set(library.videos.map(item => item.id));
@@ -614,7 +673,7 @@
     try {
       const [item, videos] = await Promise.all([
         fetchJSON(`/api/channels/${encodeURIComponent(id)}`),
-        fetchJSON(`/api/channels/${encodeURIComponent(id)}/videos?page=${page}&page_size=${pageSize}&sort=${encodeURIComponent(videoSortFromSearch(locationSearch))}`),
+        fetchJSON(`/api/channels/${encodeURIComponent(id)}/videos?page=${page}&page_size=${pageSize}&sort=${encodeURIComponent(videoSortFromSearch(locationSearch))}${hideWatchedFromSearch(locationSearch) ? '&hide_watched=1' : ''}`),
       ]);
       if (requestToken !== channelRequestToken) return;
       if (channelSubscriptionOverride.id === id && channelSubscriptionOverride.subscribed !== null) {
@@ -3282,7 +3341,7 @@
           </form>
         {/if}
 
-        <VideoSortToolbar sort={librarySort} options={videoSortOptions} controlId="library-sort" labelledBy="Library sort options" summary={libraryFeedSummary} onSortChange={setVideoSort} />
+        <VideoSortToolbar sort={librarySort} options={videoSortOptions} controlId="library-sort" labelledBy="Library sort options" summary={libraryFeedSummary} onSortChange={setVideoSort} hideWatched={libraryHideWatched} onHideWatchedChange={setHideWatched} />
 
         {#if library.status === 'loading'}
           <div class="state" data-testid="library-loading">Loading your archive...</div>
@@ -3371,7 +3430,7 @@
           </header>
           <nav class="channel-tabs" aria-label="Channel sections"><a class="active" href="/channels/{encodeURIComponent(channelID)}" onclick={event => navigate(event, `/channels/${encodeURIComponent(channelID)}`)}>Videos</a><a href="/search?q={encodeURIComponent(channelPage.item.name)}" onclick={event => navigate(event, `/search?q=${encodeURIComponent(channelPage.item.name)}`)}>Search</a></nav>
 
-          <VideoSortToolbar sort={librarySort} options={videoSortOptions} controlId="channel-sort" labelledBy="Channel sort options" onSortChange={setVideoSort} />
+          <VideoSortToolbar sort={librarySort} options={videoSortOptions} controlId="channel-sort" labelledBy="Channel sort options" onSortChange={setVideoSort} hideWatched={libraryHideWatched} onHideWatchedChange={setHideWatched} />
 
           {#if channelPage.videos.length === 0}
             <div class="state">No videos are archived for this channel yet.</div>

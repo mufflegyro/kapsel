@@ -1664,7 +1664,7 @@ func listVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		}
 		sortExpr := videoSort(sortBy, r.URL.Query().Get("order"), channelScoped)
 		where, args := videoFilters(r)
-		if homeList && videoSortIsWatching(sortBy) {
+		if (homeList && videoSortIsWatching(sortBy)) || hideWatchedParam(r) {
 			where = appendVideoFilter(where, homeUnwatchedVideoFilter())
 		}
 		writeVideoListPage(w, r, db, mediaURLs, where, args, sortExpr, page, pageSize)
@@ -1681,7 +1681,7 @@ func listHomeVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		}
 		sortExpr := videoSort(sortBy, r.URL.Query().Get("order"), false)
 		where := ""
-		if videoSortIsWatching(sortBy) {
+		if videoSortIsWatching(sortBy) || hideWatchedParam(r) {
 			where = appendVideoFilter(where, homeUnwatchedVideoFilter())
 		}
 		writeVideoListPage(w, r, db, mediaURLs, where, nil, sortExpr, page, pageSize)
@@ -1704,6 +1704,9 @@ func listChannelVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		where := "WHERE v.channel_id = ?"
 		args := []any{channelID}
 		sortExpr := videoSort(r.URL.Query().Get("sort"), r.URL.Query().Get("order"), true)
+		if hideWatchedParam(r) {
+			where = appendVideoFilter(where, homeUnwatchedVideoFilter())
+		}
 		writeVideoListPage(w, r, db, mediaURLs, where, args, sortExpr, page, pageSize)
 	}
 }
@@ -1904,6 +1907,17 @@ func videoSort(sortBy string, orderBy string, channelScoped bool) string {
 func videoSortIsWatching(sortBy string) bool {
 	switch strings.ToLower(strings.TrimSpace(sortBy)) {
 	case "watching", "continue", "in-progress":
+		return true
+	default:
+		return false
+	}
+}
+
+// hideWatchedParam reports whether the request asks to exclude finished
+// videos from a video list, as offered by the sort toolbar's checkbox.
+func hideWatchedParam(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hide_watched"))) {
+	case "1", "true", "yes":
 		return true
 	default:
 		return false

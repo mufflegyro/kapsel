@@ -150,6 +150,102 @@ test('home feed automatically appends the next page', async ({ page }) => {
   expect(pageRequests).toEqual([1, 2]);
 });
 
+test('hide watched checkbox filters the home feed and persists via the URL', async ({ page }) => {
+  const hideWatchedRequests = [];
+  const watchedVideo = { ...mockHomeVideo(2), watched: true, progress: { watched: true, position_seconds: 90, duration_seconds: 90 } };
+  await page.route('**/api/home/videos?*', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== '/api/home/videos') {
+      await route.continue();
+      return;
+    }
+    const hideWatched = url.searchParams.get('hide_watched') === '1';
+    hideWatchedRequests.push(url.searchParams.get('hide_watched'));
+    await route.fulfill({
+      json: {
+        data: hideWatched ? [mockHomeVideo(1)] : [mockHomeVideo(1), watchedVideo],
+        pagination: { page: 1, page_size: 50, total: hideWatched ? 1 : 2 },
+      },
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('video-card')).toHaveCount(2);
+  expect(hideWatchedRequests.at(-1)).toBeNull();
+
+  await page.getByTestId('library-sort-hide-watched').check();
+  await expect(page.getByTestId('video-card')).toHaveCount(1);
+  expect(hideWatchedRequests.at(-1)).toBe('1');
+  expect(new URL(page.url()).searchParams.get('hide_watched')).toBe('1');
+
+  await page.reload();
+  await expect(page.getByTestId('library-sort-hide-watched')).toBeChecked();
+  await expect(page.getByTestId('video-card')).toHaveCount(1);
+  expect(hideWatchedRequests.at(-1)).toBe('1');
+
+  await page.getByTestId('library-sort-hide-watched').uncheck();
+  await expect(page.getByTestId('video-card')).toHaveCount(2);
+  expect(hideWatchedRequests.at(-1)).toBeNull();
+  expect(new URL(page.url()).searchParams.get('hide_watched')).toBeNull();
+});
+
+test('channel toolbar hide watched toggle filters the channel feed', async ({ page }) => {
+  const hideWatchedRequests = [];
+  const channelVideo = (id, watched) => ({
+    id,
+    title: `Mock Channel Video ${id}`,
+    description: 'A deterministic channel-feed fixture.',
+    published_at: '2026-05-03T12:00:00Z',
+    duration_seconds: 90,
+    view_count: 1,
+    watched: !!watched,
+    progress: { watched: !!watched, position_seconds: watched ? 90 : 0, duration_seconds: 90 },
+    channel: { id: 'e2e-channel', name: 'E2E Test Channel' },
+  });
+  await page.route('**/api/channels/e2e-channel', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== '/api/channels/e2e-channel') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({ json: { id: 'e2e-channel', name: 'E2E Test Channel', subscribed: false, video_count: 2, description: '' } });
+  });
+  await page.route('**/api/channels/e2e-channel/videos?*', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== '/api/channels/e2e-channel/videos') {
+      await route.continue();
+      return;
+    }
+    const hideWatched = url.searchParams.get('hide_watched') === '1';
+    hideWatchedRequests.push(url.searchParams.get('hide_watched'));
+    await route.fulfill({
+      json: {
+        data: hideWatched ? [channelVideo('cv-1', false)] : [channelVideo('cv-1', false), channelVideo('cv-2', true)],
+        pagination: { page: 1, page_size: 50, total: hideWatched ? 1 : 2 },
+      },
+    });
+  });
+
+  await page.goto('/channels/e2e-channel');
+  await expect(page.getByTestId('video-card')).toHaveCount(2);
+  expect(hideWatchedRequests.at(-1)).toBeNull();
+
+  await page.getByTestId('channel-sort-hide-watched').check();
+  await expect(page.getByTestId('video-card')).toHaveCount(1);
+  expect(hideWatchedRequests.at(-1)).toBe('1');
+  expect(new URL(page.url()).searchParams.get('hide_watched')).toBe('1');
+
+  await page.reload();
+  await expect(page.getByTestId('channel-sort-hide-watched')).toBeChecked();
+  await expect(page.getByTestId('video-card')).toHaveCount(1);
+  expect(hideWatchedRequests.at(-1)).toBe('1');
+
+  await page.getByTestId('channel-sort-hide-watched').uncheck();
+  await expect(page.getByTestId('video-card')).toHaveCount(2);
+  expect(hideWatchedRequests.at(-1)).toBeNull();
+  expect(new URL(page.url()).searchParams.get('hide_watched')).toBeNull();
+});
+
 test('home add-channel prompt only appears on empty setup', async ({ page }) => {
   let channelTotal = 1;
   let channelRequests = 0;

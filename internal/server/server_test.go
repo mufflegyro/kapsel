@@ -4641,6 +4641,86 @@ VALUES
 	}
 }
 
+func TestVideoListEndpointHideWatchedFilter(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name) VALUES ('chan-hide', 'chan-hide', 'Hide Channel')"); err != nil {
+		t.Fatal(err)
+	}
+	videos := []struct {
+		id      string
+		date    string
+		watched int
+	}{
+		{id: "vid-unwatched", date: "2026-05-09"},
+		{id: "vid-flag-watched", date: "2026-05-08", watched: 1},
+		{id: "vid-progress-watched", date: "2026-05-07"},
+	}
+	for _, video := range videos {
+		_, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title, published_at, duration_seconds, watched)
+VALUES (?, ?, 'chan-hide', ?, ?, 120, ?)`, video.id, video.id, video.id, video.date, video.watched)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`
+INSERT INTO user_progress (video_id, position_seconds, duration_seconds, watched, updated_at)
+VALUES ('vid-progress-watched', 120, 120, 1, '2026-05-08T11:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(WithDatabase(db))
+
+	for _, endpoint := range []string{"/api/videos", "/api/home/videos", "/api/channels/chan-hide/videos"} {
+		separator := "?"
+		if strings.Contains(endpoint, "?") {
+			separator = "&"
+		}
+		req := httptest.NewRequest(http.MethodGet, endpoint+separator+"sort=newest&page_size=10", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		response := decodeVideoListResponse(t, rec)
+		if got := videoListIDs(response.Data); got != "vid-unwatched,vid-flag-watched,vid-progress-watched" {
+			t.Fatalf("expected watched videos present without the filter for %s, got %s", endpoint, got)
+		}
+		if response.Pagination.Total != 3 {
+			t.Fatalf("expected unfiltered total of 3 for %s, got %d", endpoint, response.Pagination.Total)
+		}
+
+		for _, query := range []string{"sort=newest&hide_watched=1", "sort=newest&hide_watched=true"} {
+			req = httptest.NewRequest(http.MethodGet, endpoint+separator+query, nil)
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			response = decodeVideoListResponse(t, rec)
+			if got := videoListIDs(response.Data); got != "vid-unwatched" {
+				t.Fatalf("expected hide_watched to keep only unfinished videos for %s %s, got %s", endpoint, query, got)
+			}
+			if response.Pagination.Total != 1 {
+				t.Fatalf("expected hide_watched total of 1 for %s %s, got %d", endpoint, query, response.Pagination.Total)
+			}
+		}
+
+		req = httptest.NewRequest(http.MethodGet, endpoint+separator+"sort=newest&hide_watched=0", nil)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		response = decodeVideoListResponse(t, rec)
+		if got := videoListIDs(response.Data); got != "vid-unwatched,vid-flag-watched,vid-progress-watched" {
+			t.Fatalf("expected hide_watched=0 to keep watched videos for %s, got %s", endpoint, got)
+		}
+	}
+
+	// The For You sort already excludes finished videos; the parameter must
+	// not change that result.
+	req := httptest.NewRequest(http.MethodGet, "/api/home/videos?sort=watching&hide_watched=1&page_size=10", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	response := decodeVideoListResponse(t, rec)
+	if got := videoListIDs(response.Data); got != "vid-unwatched" {
+		t.Fatalf("expected hide_watched with the watching sort to keep only unfinished videos, got %s", got)
+	}
+}
+
 func TestVideoListEndpointHomeFlagDoesNotAlterExplicitSort(t *testing.T) {
 	t.Parallel()
 
