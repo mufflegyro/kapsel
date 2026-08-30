@@ -777,7 +777,9 @@ func getSettings(config config) http.HandlerFunc {
 		}
 		response.Checks = settingsChecks(config.settingsDiagnostics, response.YTDLP, response.Storage)
 		if config.updater != nil && response.Updates != nil {
-			response.Checks = append(response.Checks, updateSettingsCheck(*response.Updates))
+			// The update state is the most actionable check — a pending offer
+			// or a failed release check needs a decision — so it leads the list.
+			response.Checks = append([]settingsReadinessCheck{updateSettingsCheck(*response.Updates)}, response.Checks...)
 		}
 
 		_ = json.NewEncoder(w).Encode(response)
