@@ -1213,6 +1213,16 @@ button:disabled {
   padding: 0.6rem 1rem;
 }
 
+.update-secondary {
+  background: rgba(247, 239, 226, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.6rem 1rem;
+}
+
 .state {
   background: var(--panel);
   border: 1px dashed var(--line);

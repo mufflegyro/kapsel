@@ -172,12 +172,12 @@
               <div class="update-confirm">
                 <p>Replace kapsel with <strong>{pending.version}</strong>? The database is backed up first, then the service restarts itself.</p>
                 <button type="button" class="update-approve" onclick={approve} disabled={busyAction !== ''}>{busyAction === 'approve' ? 'Applying...' : 'Confirm update'}</button>
-                <button type="button" onclick={cancelApproval} disabled={busyAction !== ''}>Cancel</button>
+                <button type="button" class="update-secondary" onclick={cancelApproval} disabled={busyAction !== ''}>Cancel</button>
               </div>
             {:else}
               <div class="update-actions">
                 <button type="button" class="update-approve" onclick={() => requestApproval(pending.version)} disabled={busyAction !== ''}>Approve update</button>
-                <button type="button" onclick={dismiss} disabled={busyAction !== ''}>{busyAction === 'dismiss' ? 'Dismissing...' : 'Dismiss'}</button>
+                <button type="button" class="update-secondary" onclick={dismiss} disabled={busyAction !== ''}>{busyAction === 'dismiss' ? 'Dismissing...' : 'Dismiss'}</button>
               </div>
             {/if}
           {/if}
