@@ -1,0 +1,128 @@
+# Release pipeline for kapsel.
+#
+# Publishes the exact artifacts the in-app updater consumes:
+#   - kapsel_<goos>_<goarch>  plain binaries (linux/amd64, linux/arm64,
+#     darwin/amd64, darwin/arm64)
+#   - checksums.txt           "<sha256>  <asset>" per line
+#
+# Tag push (v*) builds and publishes a GitHub release on mufflegyro/yummle;
+# the updater then offers the release to archives running an older version.
+# Manual runs (workflow_dispatch) build the same artifacts and upload them as
+# a workflow artifact for inspection without publishing anything.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25.9.0"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.33.2"
+
+      - name: Build the embedded frontend
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend build
+          test -f internal/web/static/index.html
+
+      - name: Determine the release version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "KAPSEL_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          else
+            # Manual/dry-run builds are development builds: stamp plain dev
+            # so version.Dev() and every update-eligibility check treat them
+            # as non-releases rather than as a plausible-looking version.
+            echo "KAPSEL_VERSION=dev" >> "$GITHUB_ENV"
+          fi
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Cross-compile release binaries
+        env:
+          # modernc.org/sqlite is pure Go; CGO_ENABLED=0 keeps every artifact
+          # statically linked, matching the Docker image and staying
+          # glibc/musl-independent.
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X kapsel/internal/version.Version=${KAPSEL_VERSION}" \
+            -o dist/kapsel_linux_amd64 ./cmd/kapsel
+          GOARCH=arm64 go build -trimpath \
+            -ldflags "-s -w -X kapsel/internal/version.Version=${KAPSEL_VERSION}" \
+            -o dist/kapsel_linux_arm64 ./cmd/kapsel
+          GOOS=darwin go build -trimpath \
+            -ldflags "-s -w -X kapsel/internal/version.Version=${KAPSEL_VERSION}" \
+            -o dist/kapsel_darwin_amd64 ./cmd/kapsel
+          GOOS=darwin GOARCH=arm64 go build -trimpath \
+            -ldflags "-s -w -X kapsel/internal/version.Version=${KAPSEL_VERSION}" \
+            -o dist/kapsel_darwin_arm64 ./cmd/kapsel
+
+      - name: Generate checksums.txt
+        working-directory: dist
+        run: |
+          # "<digest>  <asset>" lines, the format the updater's checksum
+          # parser expects. Generated explicitly instead of piping sha256sum
+          # output so the format is stable regardless of coreutils defaults.
+          : > checksums.txt
+          for asset in kapsel_*; do
+            printf '%s  %s\n' "$(sha256sum "$asset" | cut -d' ' -f1)" "$asset" >> checksums.txt
+          done
+          cat checksums.txt
+
+      - name: Verify checksum coverage
+        working-directory: dist
+        run: |
+          for asset in kapsel_*; do
+            grep -Eq '^[0-9a-f]{64}  '"$(basename "$asset")"'$' checksums.txt
+          done
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release-notes/<tag>.md file in the tagged commit becomes the
+          # release body; otherwise GitHub generates notes from commits.
+          notes_args="--generate-notes"
+          if [ -f "release-notes/$GITHUB_REF_NAME.md" ]; then
+            notes_args="--notes-file release-notes/$GITHUB_REF_NAME.md"
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "kapsel $GITHUB_REF_NAME" \
+            --verify-tag \
+            $notes_args
+
+      - name: Upload build artifacts (manual runs only)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kapsel-dist-${{ github.sha }}
+          path: dist/

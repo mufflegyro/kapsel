@@ -1178,6 +1178,41 @@ button:disabled {
   margin: 0;
 }
 
+.update-offer a {
+  color: var(--accent);
+}
+
+.update-offer p.state-error {
+  margin: 0;
+}
+
+.update-actions,
+.update-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  grid-column: 1 / -1;
+}
+
+.update-confirm {
+  align-items: center;
+}
+
+.update-confirm p {
+  flex: 1 1 16rem;
+  margin: 0;
+}
+
+.update-approve {
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #1d1306;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.6rem 1rem;
+}
+
 .state {
   background: var(--panel);
   border: 1px dashed var(--line);

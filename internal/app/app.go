@@ -11,6 +11,7 @@ import (
 
 	"kapsel/internal/applock"
 	"kapsel/internal/auth"
+	"kapsel/internal/backup"
 	"kapsel/internal/config"
 	"kapsel/internal/database"
 	"kapsel/internal/download"
@@ -20,6 +21,8 @@ import (
 	"kapsel/internal/server"
 	"kapsel/internal/sponsorblock"
 	"kapsel/internal/taimport"
+	"kapsel/internal/updater"
+	"kapsel/internal/version"
 )
 
 type App struct {
@@ -28,6 +31,7 @@ type App struct {
 	Jobs    *jobs.Store
 	Runner  *jobs.Runner
 	Handler http.Handler
+	Updater *updater.Updater
 	lock    *applock.Lock
 }
 
@@ -60,6 +64,21 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	jobStore := jobs.NewStore(db)
 	authManager := auth.NewManager(auth.Config{Enabled: cfg.AuthMode != "disabled", Username: cfg.AuthUsername, PasswordHash: cfg.AuthPasswordHash, SessionSecret: cfg.SessionSecret, SessionTTL: cfg.SessionTTL, CookieSecure: cfg.SessionCookieSecure})
 	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore}, nil)
+	updaterService := updater.New(db, jobStore, updater.Config{
+		Repo:           cfg.UpdateRepo,
+		CurrentVersion: version.Version,
+		DataDir:        cfg.DataDir,
+		DBPath:         cfg.DBPath,
+		CheckInterval:  cfg.UpdateCheckInterval,
+		CreateBackup: func(ctx context.Context, outputPath string) (updater.BackupMetadata, error) {
+			metadata, err := backup.Create(ctx, cfg, outputPath)
+			if err != nil {
+				return updater.BackupMetadata{}, err
+			}
+
+			return updater.BackupMetadata{SchemaVersion: metadata.SchemaVersion}, nil
+		},
+	})
 	previewer := previews.NewJobHandler(db, previews.Config{MediaRoot: cfg.MediaRoot, FFmpegPath: cfg.FFMPEGPath, JobStore: jobStore})
 	taImporter := taimport.NewJobHandler(db, jobStore, cfg.ImportRoot).WithDiskSpace(cfg.DataDir, cfg.MinFreeSpaceBytes, nil)
 	runner := jobs.NewRunner(jobStore, map[string]jobs.Handler{
@@ -71,6 +90,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		download.PlaylistImportJobType:      downloader.HandlePlaylistImport,
 		download.RetentionJobType:           downloader.HandleRetention,
 		download.YTDLPUpdateJobType:         downloader.HandleYTDLPUpdate,
+		updater.ReleaseCheckJobType:         updaterService.HandleReleaseCheck,
+		updater.SelfUpdateJobType:           updaterService.HandleSelfUpdate,
 		previews.JobType:                    previewer.Handle,
 		taimport.JobType:                    taImporter.Handle,
 	})
@@ -105,6 +126,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	if cfg.SponsorBlockEnabled {
 		handlerOptions = append(handlerOptions, server.WithSponsorBlockClient(sponsorblock.NewClient()))
 	}
+	handlerOptions = append(handlerOptions, server.WithUpdater(updaterService))
 	handler := server.NewHandler(handlerOptions...)
 
 	return &App{
@@ -113,6 +135,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Jobs:    jobStore,
 		Runner:  runner,
 		Handler: handler,
+		Updater: updaterService,
 		lock:    lock,
 	}, nil
 }
@@ -126,8 +149,29 @@ func (a *App) RunJobs(ctx context.Context) error {
 	}
 	go a.runRetentionScheduler(ctx, time.Hour)
 	go a.runYTDLPUpdateScheduler(ctx, time.Hour)
+	if a.Updater != nil && a.Config.UpdateCheckInterval > 0 {
+		go a.runUpdateCheckScheduler(ctx, time.Hour)
+	}
 
 	return a.Runner.RunLoop(ctx, time.Second)
+}
+
+func (a *App) runUpdateCheckScheduler(ctx context.Context, tick time.Duration) {
+	if tick <= 0 {
+		tick = time.Hour
+	}
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		if _, err := a.Updater.EnsureReleaseCheckJobs(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("release check scheduler failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *App) runYTDLPUpdateScheduler(ctx context.Context, interval time.Duration) {

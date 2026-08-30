@@ -5,6 +5,7 @@
   import VideoCard from './components/VideoCard.svelte';
   import VideoSortToolbar from './components/VideoSortToolbar.svelte';
   import SettingsDiagnosticsPanel from './routes/SettingsDiagnosticsPanel.svelte';
+  import SettingsUpdatesPanel from './routes/SettingsUpdatesPanel.svelte';
   import WatchRoute from './routes/WatchRoute.svelte';
   import { channelHref, channelInitial, isCatalogOnly, metadataLine, thumbnailFallback, thumbnailStyle, videoHref } from './display.js';
   import '@videojs/html/video/player';
@@ -90,6 +91,7 @@
   let searchRequestToken = 0;
   let commentsRequestToken = 0;
   let diagnosticsRequestToken = 0;
+  let updatesRequestToken = 0;
   let sessionRequestToken = 0;
   let jobsRequestToken = 0;
   let jobsBackgroundRequestToken = 0;
@@ -180,6 +182,7 @@
   let searchPage = { status: 'idle', query: '', results: [], error: '' };
   let commentsPage = { status: 'idle', videoID: '', comments: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let diagnostics = { status: 'idle', readiness: null, error: '' };
+  let updates = { status: 'idle', summary: null, error: '' };
   let jobsPage = { status: 'idle', filter: 'all', jobs: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let jobAction = { id: '', action: '', error: '' };
   let jobErrorCopy = { id: '', status: '' };
@@ -247,6 +250,7 @@
     }
     if (path === '/settings') {
       loadDiagnostics();
+      loadUpdates();
       return;
     }
     if (path === '/downloads') {
@@ -782,6 +786,23 @@
       if (requestToken !== diagnosticsRequestToken) return;
       diagnostics = { status: 'error', readiness: null, error: error.message };
     }
+  }
+
+  async function loadUpdates() {
+    const requestToken = ++updatesRequestToken;
+    updates = { status: 'loading', summary: updates.summary, error: '' };
+    try {
+      const summary = await fetchJSON('/api/updates');
+      if (requestToken !== updatesRequestToken) return;
+      updates = { status: 'loaded', summary, error: '' };
+    } catch (error) {
+      if (requestToken !== updatesRequestToken) return;
+      updates = { status: 'error', summary: null, error: error.message };
+    }
+  }
+
+  function handleUpdateJobCreated() {
+    if (path === '/downloads') loadJobs({ background: true });
   }
 
   async function loadJobs(options = {}) {
@@ -3582,6 +3603,7 @@
             {/if}
           </section>
         {:else if path === '/settings'}
+          <SettingsUpdatesPanel updates={updates.summary} loadUpdates={loadUpdates} fetchJSON={fetchJSON} onJobCreated={handleUpdateJobCreated} formatJobTime={formatJobTime} />
           <SettingsDiagnosticsPanel {diagnostics} {loadDiagnostics} {settingsRows} {checkStateLabel} {formatBytes} {storageMaintenanceRows} />
         {/if}
       </section>

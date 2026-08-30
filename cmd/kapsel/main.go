@@ -27,6 +27,7 @@ import (
 	"kapsel/internal/storage"
 	"kapsel/internal/subsimport"
 	"kapsel/internal/taimport"
+	"kapsel/internal/version"
 )
 
 const (
@@ -59,6 +60,9 @@ func runWithConfig(ctx context.Context, cfg config.Config, args []string, stdin 
 			return runStorageReport(ctx, cfg, args[1:], stdout, stderr)
 		case "storage-cleanup":
 			return runStorageCleanup(ctx, cfg, args[1:], stdout, stderr)
+		case "version":
+			fmt.Fprintln(stdout, version.Version)
+			return 0
 		default:
 			fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 			return 2
@@ -352,11 +356,24 @@ func runServer(ctx context.Context, cfg config.Config) error {
 		}
 	}()
 
+	// The updater requests a process restart after an approved release has
+	// been downloaded, verified, backed up for, and swapped in. The restart
+	// runs the full graceful shutdown path and then exec's the new binary.
+	restartRequested := make(chan struct{}, 1)
+	if application.Updater != nil {
+		application.Updater.SetRestartFunc(func() {
+			select {
+			case restartRequested <- struct{}{}:
+			default:
+			}
+		})
+	}
+
 	srv := newHTTPServer(cfg.Addr, application.Handler)
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("starting kapsel", "addr", cfg.Addr, "db", cfg.DBPath, "media", cfg.MediaRoot)
+		slog.Info("starting kapsel", "addr", cfg.Addr, "db", cfg.DBPath, "media", cfg.MediaRoot, "version", version.Version)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -367,6 +384,8 @@ func runServer(ctx context.Context, cfg config.Config) error {
 	select {
 	case err := <-serverErr:
 		return err
+	case <-restartRequested:
+		slog.Info("self-update applied; shutting down to restart into the new binary")
 	case <-ctx.Done():
 	}
 
@@ -380,6 +399,17 @@ func runServer(ctx context.Context, cfg config.Config) error {
 	case <-workerDone:
 	case <-time.After(10 * time.Second):
 		slog.Error("job runner did not shut down within 10 seconds")
+	}
+
+	// Close the app before exec so the SQLite database and lock file are
+	// released cleanly; the deferred Close is a no-op if exec fails.
+	if err := application.Close(); err != nil {
+		slog.Warn("application shutdown reported an error before restart", "error", err)
+	}
+
+	if err := restartIntoUpdatedBinary(); err != nil {
+		slog.Error("could not restart into the updated binary; exiting so a supervisor can start it", "error", err)
+		return fmt.Errorf("restart into the updated binary failed: %w", err)
 	}
 
 	return nil

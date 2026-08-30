@@ -30,7 +30,383 @@ import (
 	"kapsel/internal/sponsorblock"
 	"kapsel/internal/storage"
 	"kapsel/internal/taimport"
+	"kapsel/internal/updater"
 )
+
+// --- /api/updates endpoints ---
+
+// stubUpdateService replaces the real updater behind the web API so handler
+// tests never touch GitHub, the database, or the binary swap pipeline.
+type stubUpdateService struct {
+	status       updater.StatusSummary
+	statusErr    error
+	checkJob     jobs.Job
+	checkCreated bool
+	checkErr     error
+
+	approveCalls      int
+	approveID         int64
+	approveApprovedBy string
+	approveOffer      updater.Offer
+	approveJob        jobs.Job
+	approveJobCreated bool
+	approveErr        error
+
+	dismissCalls int
+	dismissID    int64
+	dismissOffer updater.Offer
+	dismissErr   error
+
+	enabled bool
+}
+
+func (s *stubUpdateService) Enabled() bool { return s.enabled }
+
+func (s *stubUpdateService) Status(ctx context.Context) (updater.StatusSummary, error) {
+	return s.status, s.statusErr
+}
+
+func (s *stubUpdateService) CheckNow(ctx context.Context) (jobs.Job, bool, error) {
+	return s.checkJob, s.checkCreated, s.checkErr
+}
+
+func (s *stubUpdateService) Approve(ctx context.Context, id int64, approvedBy string) (updater.Offer, jobs.Job, bool, error) {
+	s.approveCalls++
+	s.approveID = id
+	s.approveApprovedBy = approvedBy
+	if s.approveErr != nil {
+		return updater.Offer{}, jobs.Job{}, false, s.approveErr
+	}
+
+	return s.approveOffer, s.approveJob, s.approveJobCreated, nil
+}
+
+func (s *stubUpdateService) Dismiss(ctx context.Context, id int64) (updater.Offer, error) {
+	s.dismissCalls++
+	s.dismissID = id
+	if s.dismissErr != nil {
+		return updater.Offer{}, s.dismissErr
+	}
+
+	return s.dismissOffer, nil
+}
+
+// loginUpdatesSession performs the /api/login flow and returns the session
+// cookie for authenticated requests against admin-gated endpoints.
+func loginUpdatesSession(t *testing.T, handler http.Handler) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"username":"admin","password":"open sesame"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: status %d body=%s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == "" {
+		t.Fatalf("expected a session cookie, got %#v", cookies)
+	}
+
+	return cookies[0]
+}
+
+func TestUpdatesEndpointsRequireAuthentication(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{}
+	handler := NewHandler(WithAuth(newServerAuthManager(t, time.Now())), WithUpdater(stub))
+	paths := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/updates"},
+		{http.MethodPost, "/api/updates/check"},
+		{http.MethodPost, "/api/updates/3/approve"},
+		{http.MethodPost, "/api/updates/3/dismiss"},
+	}
+	for _, endpoint := range paths {
+		req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s: expected status %d, got %d", endpoint.method, endpoint.path, http.StatusUnauthorized, rec.Code)
+		}
+	}
+	if stub.approveCalls != 0 || stub.dismissCalls != 0 {
+		t.Error("unauthenticated requests must not reach the update service")
+	}
+
+	// The same requests succeed with a session cookie.
+	cookie := loginUpdatesSession(t, handler)
+	for _, endpoint := range paths {
+		req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK && rec.Code != http.StatusAccepted {
+			t.Errorf("%s %s: expected success, got %d body=%s", endpoint.method, endpoint.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestGetUpdatesReturnsSummary(t *testing.T) {
+	t.Parallel()
+
+	pending := updater.Offer{ID: 7, Version: "v1.1.0", Status: updater.OfferStatusPending}
+	stub := &stubUpdateService{status: updater.StatusSummary{
+		CurrentVersion:     "v1.0.0",
+		Repo:               "mufflegyro/yummle",
+		CheckInterval:      86400,
+		CheckIntervalLabel: "24h",
+		UpdateEnabled:      true,
+		Pending:            &pending,
+		Recent:             []updater.Offer{pending, {ID: 5, Version: "v1.0.0", Status: updater.OfferStatusApplied}},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/updates", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var summary struct {
+		CurrentVersion     string          `json:"current_version"`
+		Repo               string          `json:"repo"`
+		CheckInterval      int64           `json:"check_interval_seconds"`
+		CheckIntervalLabel string          `json:"check_interval_label"`
+		UpdateEnabled      bool            `json:"update_checks_enabled"`
+		Pending            *updater.Offer  `json:"pending"`
+		Recent             []updater.Offer `json:"recent"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.CurrentVersion != "v1.0.0" || summary.Repo != "mufflegyro/yummle" || summary.CheckInterval != 86400 || summary.CheckIntervalLabel != "24h" || !summary.UpdateEnabled {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if summary.Pending == nil || summary.Pending.Version != "v1.1.0" || summary.Pending.Status != updater.OfferStatusPending {
+		t.Fatalf("pending = %#v", summary.Pending)
+	}
+	if len(summary.Recent) != 2 || summary.Recent[1].Status != updater.OfferStatusApplied {
+		t.Fatalf("recent = %#v", summary.Recent)
+	}
+}
+
+func TestGetUpdatesMapsStatusErrorTo500(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{statusErr: errors.New("db offline")}
+	req := httptest.NewRequest(http.MethodGet, "/api/updates", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
+func TestCreateUpdateCheckReturnsAcceptedJob(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{checkJob: jobs.Job{ID: "check-42", Type: updater.ReleaseCheckJobType, Status: jobs.StatusQueued}, checkCreated: true}
+	req := httptest.NewRequest(http.MethodPost, "/api/updates/check", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Job struct {
+			ID string `json:"id"`
+		} `json:"job"`
+		Created bool `json:"created"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Job.ID != "check-42" || !response.Created {
+		t.Fatalf("response = %#v", response)
+	}
+
+	// A duplicate check reports created=false with the same job.
+	stub.checkCreated = false
+	rec = httptest.NewRecorder()
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/updates/check", nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Created {
+		t.Error("deduped check must report created=false")
+	}
+}
+
+func TestCreateUpdateCheckMapsErrorTo500(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{checkErr: errors.New("job store unavailable")}
+	req := httptest.NewRequest(http.MethodPost, "/api/updates/check", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
+func TestApproveUpdateEndpointCapturesAuthenticatedUser(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{
+		approveOffer:      updater.Offer{ID: 9, Version: "v1.1.0", Status: updater.OfferStatusApproved, ApprovedBy: "admin"},
+		approveJob:        jobs.Job{ID: "apply-9", Type: updater.SelfUpdateJobType, Status: jobs.StatusQueued},
+		approveJobCreated: true,
+	}
+	handler := NewHandler(WithAuth(newServerAuthManager(t, time.Now())), WithUpdater(stub))
+	cookie := loginUpdatesSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/updates/9/approve", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if stub.approveID != 9 || stub.approveApprovedBy != "admin" {
+		t.Fatalf("approve(id=%d, approvedBy=%q)", stub.approveID, stub.approveApprovedBy)
+	}
+	var response struct {
+		Offer updater.Offer `json:"offer"`
+		Job   *struct {
+			ID string `json:"id"`
+		} `json:"job"`
+		JobCreated bool `json:"job_created"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Offer.ID != 9 || response.Offer.ApprovedBy != "admin" || response.Job == nil || response.Job.ID != "apply-9" || !response.JobCreated {
+		t.Fatalf("response = %#v", response)
+	}
+
+	// Without auth configured the handler falls back to the generic label.
+	fallback := &stubUpdateService{approveOffer: updater.Offer{ID: 9, Version: "v1.1.0", Status: updater.OfferStatusApproved}}
+	req = httptest.NewRequest(http.MethodPost, "/api/updates/9/approve", nil)
+	rec = httptest.NewRecorder()
+	NewHandler(WithUpdater(fallback)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if fallback.approveApprovedBy != "archive-admin" {
+		t.Fatalf("fallback approvedBy = %q", fallback.approveApprovedBy)
+	}
+}
+
+func TestApproveUpdateEndpointMapsErrorsToStatuses(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"missing offer", updater.ErrOfferNotFound, http.StatusNotFound},
+		{"not approvable", updater.ErrOfferNotPending, http.StatusConflict},
+		{"unexpected", errors.New("github exploded"), http.StatusInternalServerError},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &stubUpdateService{approveErr: test.err}
+			req := httptest.NewRequest(http.MethodPost, "/api/updates/12/approve", nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+			if rec.Code != test.wantStatus {
+				t.Fatalf("expected status %d, got %d", test.wantStatus, rec.Code)
+			}
+		})
+	}
+}
+
+func TestApproveUpdateEndpointRejectsInvalidID(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/updates/not-a-number/approve", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	if stub.approveCalls != 0 {
+		t.Error("invalid ids must not reach the update service")
+	}
+}
+
+func TestDismissUpdateEndpointAndErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubUpdateService{dismissOffer: updater.Offer{ID: 4, Version: "v1.1.0", Status: updater.OfferStatusDismissed}}
+	req := httptest.NewRequest(http.MethodPost, "/api/updates/4/dismiss", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if stub.dismissID != 4 {
+		t.Fatalf("dismiss(id=%d)", stub.dismissID)
+	}
+	var offer updater.Offer
+	if err := json.Unmarshal(rec.Body.Bytes(), &offer); err != nil {
+		t.Fatal(err)
+	}
+	if offer.ID != 4 || offer.Status != updater.OfferStatusDismissed {
+		t.Fatalf("offer = %#v", offer)
+	}
+
+	errorCases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"missing offer", updater.ErrOfferNotFound, http.StatusNotFound},
+		{"not dismissable", updater.ErrOfferNotPending, http.StatusConflict},
+		{"unexpected", errors.New("db offline"), http.StatusInternalServerError},
+	}
+	for _, test := range errorCases {
+		t.Run(test.name, func(t *testing.T) {
+			failing := &stubUpdateService{dismissErr: test.err}
+			req := httptest.NewRequest(http.MethodPost, "/api/updates/4/dismiss", nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(WithUpdater(failing)).ServeHTTP(rec, req)
+
+			if rec.Code != test.wantStatus {
+				t.Fatalf("expected status %d, got %d", test.wantStatus, rec.Code)
+			}
+		})
+	}
+
+	// Invalid path ids are rejected before the service is consulted.
+	rec = httptest.NewRecorder()
+	NewHandler(WithUpdater(stub)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/updates/xyz/dismiss", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
 
 func TestHealthEndpoint(t *testing.T) {
 	t.Parallel()

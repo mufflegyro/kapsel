@@ -14,33 +14,43 @@ import (
 )
 
 const (
-	EnvAddr                = "KAPSEL_ADDR"
-	EnvAuthMode            = "KAPSEL_AUTH_MODE"
-	EnvAuthPasswordHash    = "KAPSEL_AUTH_PASSWORD_HASH"
-	EnvAuthUsername        = "KAPSEL_AUTH_USERNAME"
-	EnvDataDir             = "KAPSEL_DATA_DIR"
-	EnvDBPath              = "KAPSEL_DB_PATH"
-	EnvImportRoot          = "KAPSEL_IMPORT_ROOT"
-	EnvMediaRoot           = "KAPSEL_MEDIA_ROOT"
-	EnvMediaSigningSecret  = "KAPSEL_MEDIA_SIGNING_SECRET"
-	EnvMediaURLTTL         = "KAPSEL_MEDIA_URL_TTL"
-	EnvMinFreeSpace        = "KAPSEL_MIN_FREE_SPACE"
-	EnvPreviewsEnabled     = "KAPSEL_PREVIEWS_ENABLED"
-	EnvSponsorBlockEnabled = "KAPSEL_SPONSORBLOCK_ENABLED"
-	EnvSessionCookieSecure = "KAPSEL_SESSION_COOKIE_SECURE"
-	EnvSessionSecret       = "KAPSEL_SESSION_SECRET"
-	EnvSessionTTL          = "KAPSEL_SESSION_TTL"
-	EnvFFMPEGPath          = "KAPSEL_FFMPEG_PATH"
-	EnvYTDLPCookiesFile    = "KAPSEL_YTDLP_COOKIES_FILE"
-	EnvYTDLPFormat         = "KAPSEL_YTDLP_FORMAT"
-	EnvYTDLPPath           = "KAPSEL_YTDLP_PATH"
-	EnvYTDLPSleepInterval  = "KAPSEL_YTDLP_SLEEP_INTERVAL"
-	EnvYTDLPUpdateInterval = "KAPSEL_YTDLP_UPDATE_INTERVAL"
-	EnvSubtitlesEnabled           = "KAPSEL_SUBTITLES_ENABLED"
+	EnvAddr                        = "KAPSEL_ADDR"
+	EnvAuthMode                    = "KAPSEL_AUTH_MODE"
+	EnvAuthPasswordHash            = "KAPSEL_AUTH_PASSWORD_HASH"
+	EnvAuthUsername                = "KAPSEL_AUTH_USERNAME"
+	EnvDataDir                     = "KAPSEL_DATA_DIR"
+	EnvDBPath                      = "KAPSEL_DB_PATH"
+	EnvImportRoot                  = "KAPSEL_IMPORT_ROOT"
+	EnvMediaRoot                   = "KAPSEL_MEDIA_ROOT"
+	EnvMediaSigningSecret          = "KAPSEL_MEDIA_SIGNING_SECRET"
+	EnvMediaURLTTL                 = "KAPSEL_MEDIA_URL_TTL"
+	EnvMinFreeSpace                = "KAPSEL_MIN_FREE_SPACE"
+	EnvPreviewsEnabled             = "KAPSEL_PREVIEWS_ENABLED"
+	EnvSponsorBlockEnabled         = "KAPSEL_SPONSORBLOCK_ENABLED"
+	EnvSessionCookieSecure         = "KAPSEL_SESSION_COOKIE_SECURE"
+	EnvSessionSecret               = "KAPSEL_SESSION_SECRET"
+	EnvSessionTTL                  = "KAPSEL_SESSION_TTL"
+	EnvFFMPEGPath                  = "KAPSEL_FFMPEG_PATH"
+	EnvYTDLPCookiesFile            = "KAPSEL_YTDLP_COOKIES_FILE"
+	EnvYTDLPFormat                 = "KAPSEL_YTDLP_FORMAT"
+	EnvYTDLPPath                   = "KAPSEL_YTDLP_PATH"
+	EnvYTDLPSleepInterval          = "KAPSEL_YTDLP_SLEEP_INTERVAL"
+	EnvYTDLPUpdateInterval         = "KAPSEL_YTDLP_UPDATE_INTERVAL"
+	EnvUpdateRepo                  = "KAPSEL_UPDATE_REPO"
+	EnvUpdateCheckInterval         = "KAPSEL_UPDATE_CHECK_INTERVAL"
+	EnvSubtitlesEnabled            = "KAPSEL_SUBTITLES_ENABLED"
 	EnvChannelAutoDownloadInterval = "KAPSEL_CHANNEL_AUTO_DOWNLOAD_INTERVAL"
 )
 
 const defaultYTDLPFormat = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
+
+const (
+	// DefaultUpdateRepo is the GitHub owner/name repository checked for
+	// application updates.
+	DefaultUpdateRepo = "mufflegyro/yummle"
+	// DefaultUpdateCheckInterval paces background GitHub release checks.
+	DefaultUpdateCheckInterval = 24 * time.Hour
+)
 
 const DefaultMediaURLTTL = 24 * time.Hour
 
@@ -70,7 +80,9 @@ type Config struct {
 	YTDLPSleepInterval           time.Duration
 	YTDLPUpdateInterval          time.Duration
 	SubtitlesEnabled             bool
-	ChannelAutoDownloadInterval time.Duration
+	ChannelAutoDownloadInterval  time.Duration
+	UpdateRepo                   string
+	UpdateCheckInterval          time.Duration
 }
 
 func Load() Config {
@@ -108,13 +120,19 @@ func loadFromLookup(lookup func(string) (string, bool), lookPath func(string) (s
 		SessionTTL:                   durationOrDefault(lookup, EnvSessionTTL, 7*24*time.Hour),
 		FFMPEGPath:                   ffmpegPath,
 		SubtitlesEnabled:             boolOrDefault(lookup, EnvSubtitlesEnabled, true),
-		ChannelAutoDownloadInterval: nonNegativeDurationOrDefault(lookup, EnvChannelAutoDownloadInterval, download.DefaultChannelAutoSyncInterval),
+		ChannelAutoDownloadInterval:  nonNegativeDurationOrDefault(lookup, EnvChannelAutoDownloadInterval, download.DefaultChannelAutoSyncInterval),
 		YTDLPCookiesFile:             strings.TrimSpace(valueOrDefault(lookup, EnvYTDLPCookiesFile, "")),
 		YTDLPFormat:                  valueOrDefault(lookup, EnvYTDLPFormat, defaultYTDLPFormat),
 		YTDLPPath:                    valueOrDefault(lookup, EnvYTDLPPath, "yt-dlp"),
 		YTDLPSleepInterval:           nonNegativeDurationOrDefault(lookup, EnvYTDLPSleepInterval, download.DefaultYTDLPSleepInterval),
 		YTDLPUpdateInterval:          nonNegativeDurationOrDefault(lookup, EnvYTDLPUpdateInterval, download.DefaultYTDLPUpdateInterval),
+		UpdateRepo:                   updateRepo(lookup),
+		UpdateCheckInterval:          nonNegativeDurationOrDefault(lookup, EnvUpdateCheckInterval, DefaultUpdateCheckInterval),
 	}
+}
+
+func updateRepo(lookup func(string) (string, bool)) string {
+	return strings.TrimSpace(valueOrDefault(lookup, EnvUpdateRepo, DefaultUpdateRepo))
 }
 
 func previewsEnabledOrDefault(lookup func(string) (string, bool), ffmpegPath string, lookPath func(string) (string, error)) bool {

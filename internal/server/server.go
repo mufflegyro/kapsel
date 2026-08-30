@@ -34,6 +34,7 @@ import (
 	"kapsel/internal/sponsorblock"
 	"kapsel/internal/storage"
 	"kapsel/internal/taimport"
+	"kapsel/internal/updater"
 	"kapsel/internal/web"
 )
 
@@ -82,6 +83,17 @@ type config struct {
 	settingsStatus         bool
 	supportedSchemaVersion int
 	sponsorBlockClient     sponsorBlockClient
+	updater                updateService
+}
+
+// updateService is the subset of the updater the web API exposes. The
+// updater package implements it; tests substitute a stub.
+type updateService interface {
+	Status(ctx context.Context) (updater.StatusSummary, error)
+	CheckNow(ctx context.Context) (jobs.Job, bool, error)
+	Approve(ctx context.Context, id int64, approvedBy string) (updater.Offer, jobs.Job, bool, error)
+	Dismiss(ctx context.Context, id int64) (updater.Offer, error)
+	Enabled() bool
 }
 
 type sponsorBlockClient interface {
@@ -240,6 +252,12 @@ func WithSponsorBlockClient(client sponsorBlockClient) Option {
 	}
 }
 
+func WithUpdater(service updateService) Option {
+	return func(config *config) {
+		config.updater = service
+	}
+}
+
 func NewHandler(options ...Option) http.Handler {
 	var config config
 	for _, option := range options {
@@ -309,6 +327,12 @@ func NewHandler(options ...Option) http.Handler {
 		if config.importRoot != "" {
 			mux.HandleFunc("POST /api/imports/tubearchivist", requireAuth(config, createTubeArchivistImport(config.jobs, config.importRoot)))
 		}
+	}
+	if config.updater != nil {
+		mux.HandleFunc("GET /api/updates", requireAuth(config, getUpdates(config)))
+		mux.HandleFunc("POST /api/updates/check", requireAuth(config, createUpdateCheck(config)))
+		mux.HandleFunc("POST /api/updates/{id}/approve", requireAuth(config, approveUpdate(config)))
+		mux.HandleFunc("POST /api/updates/{id}/dismiss", requireAuth(config, dismissUpdate(config)))
 	}
 	mux.HandleFunc("GET /api/", http.NotFound)
 	if config.media != nil {
@@ -459,6 +483,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// requestPathID parses the {id} path segment as a database row id.
+func requestPathID(r *http.Request) (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
 }
 
 func decodeJSONPayload(w http.ResponseWriter, r *http.Request, maxBytes int64, payload any) error {
@@ -692,6 +721,7 @@ type settingsResponse struct {
 	YTDLP              *download.YTDLPStatus    `json:"yt_dlp,omitempty"`
 	Storage            *diskspace.Report        `json:"storage,omitempty"`
 	StorageMaintenance *storage.Summary         `json:"storage_maintenance,omitempty"`
+	Updates            *updater.StatusSummary   `json:"updates,omitempty"`
 }
 
 type settingsConfiguration struct {
@@ -740,7 +770,15 @@ func getSettings(config config) http.HandlerFunc {
 				response.StorageMaintenance = &report.Summary
 			}
 		}
+		if config.updater != nil {
+			if summary, err := config.updater.Status(r.Context()); err == nil {
+				response.Updates = &summary
+			}
+		}
 		response.Checks = settingsChecks(config.settingsDiagnostics, response.YTDLP, response.Storage)
+		if config.updater != nil && response.Updates != nil {
+			response.Checks = append(response.Checks, updateSettingsCheck(*response.Updates))
+		}
 
 		_ = json.NewEncoder(w).Encode(response)
 	}
@@ -864,11 +902,109 @@ func previewSettingsCheck(enabled bool, ffmpegPath string) settingsReadinessChec
 	return settingsReadinessCheck{ID: "timeline_previews", Label: "Timeline previews", State: "pass", Summary: "Timeline previews are enabled with an ffmpeg path configured.", Detail: ffmpegPath}
 }
 
+func updateSettingsCheck(summary updater.StatusSummary) settingsReadinessCheck {
+	if !summary.UpdateEnabled {
+		return settingsReadinessCheck{ID: "updates", Label: "Updates", State: "pass", Summary: "GitHub release checks are disabled.", Detail: "Set KAPSEL_UPDATE_CHECK_INTERVAL to a duration like 24h to enable update checks."}
+	}
+	if summary.Pending != nil {
+		return settingsReadinessCheck{ID: "updates", Label: "Updates", State: "warn", Summary: "Release " + summary.Pending.Version + " is awaiting your approval.", Detail: "Approve or dismiss the update from the Updates panel."}
+	}
+	if summary.LastCheck != nil && summary.LastCheck.Status != string(jobs.StatusSucceeded) && summary.LastCheck.Status != "" {
+		return settingsReadinessCheck{ID: "updates", Label: "Updates", State: "warn", Summary: "The latest release check did not succeed.", Detail: summary.LastCheck.Detail}
+	}
+
+	return settingsReadinessCheck{ID: "updates", Label: "Updates", State: "pass", Summary: "Release checks run against " + summary.Repo + ".", Detail: "Running version " + summary.CurrentVersion + "."}
+}
+
 func isFilesystemRoot(value string) bool {
 	cleaned := filepath.Clean(value)
 	root := filepath.VolumeName(cleaned) + string(os.PathSeparator)
 
 	return cleaned == root
+}
+
+func getUpdates(config config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		summary, err := config.updater.Status(r.Context())
+		if err != nil {
+			http.Error(w, "could not read update state", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	}
+}
+
+func createUpdateCheck(config config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		job, created, err := config.updater.CheckNow(r.Context())
+		if err != nil {
+			http.Error(w, "could not queue the release check", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, updateCheckResponse{Job: publicJobResponse(job), Created: created})
+	}
+}
+
+func approveUpdate(config config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := requestPathID(r)
+		if err != nil {
+			http.Error(w, "invalid update id", http.StatusBadRequest)
+			return
+		}
+		approvedBy := "archive-admin"
+		if config.auth != nil {
+			if username, ok := config.auth.AuthenticatedUser(r); ok && username != "" {
+				approvedBy = username
+			}
+		}
+		offer, job, created, err := config.updater.Approve(r.Context(), id, approvedBy)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, updater.ErrOfferNotFound) {
+				status = http.StatusNotFound
+			} else if errors.Is(err, updater.ErrOfferNotPending) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		jobResponse := publicJobResponse(job)
+		writeJSON(w, http.StatusOK, updateApprovalResponse{Offer: offer, Job: &jobResponse, JobCreated: created})
+	}
+}
+
+func dismissUpdate(config config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := requestPathID(r)
+		if err != nil {
+			http.Error(w, "invalid update id", http.StatusBadRequest)
+			return
+		}
+		offer, err := config.updater.Dismiss(r.Context(), id)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, updater.ErrOfferNotFound) {
+				status = http.StatusNotFound
+			} else if errors.Is(err, updater.ErrOfferNotPending) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, http.StatusOK, offer)
+	}
+}
+
+type updateCheckResponse struct {
+	Job     jobResponse `json:"job"`
+	Created bool        `json:"created"`
+}
+
+type updateApprovalResponse struct {
+	Offer      updater.Offer `json:"offer"`
+	Job        *jobResponse  `json:"job,omitempty"`
+	JobCreated bool          `json:"job_created"`
 }
 
 func createDownload(store *jobs.Store) http.HandlerFunc {
