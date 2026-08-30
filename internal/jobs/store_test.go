@@ -406,7 +406,7 @@ func TestClaimMarksStaleCancelledRunningJobCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimedAt := time.Now()
+	claimedAt := futureClaimTime()
 	claimed, ok, err := store.Claim(context.Background(), claimedAt, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +442,7 @@ func TestClaimMarksStaleRunningJobWithResultSucceeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimedAt := time.Now()
+	claimedAt := futureClaimTime()
 	claimed, ok, err := store.Claim(context.Background(), claimedAt, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -476,7 +476,7 @@ func TestClaimFailsExhaustedStaleRunningJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimedAt := time.Now()
+	claimedAt := futureClaimTime()
 	claimed, ok, err := store.Claim(context.Background(), claimedAt, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -509,7 +509,7 @@ func TestClaimDoesNotCompleteStaleRunningJobWithPartialResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimedAt := time.Now()
+	claimedAt := futureClaimTime()
 	claimed, ok, err := store.Claim(context.Background(), claimedAt, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -837,7 +837,7 @@ func TestClaimMarksStaleCancelledRunningJobWithResultCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimedAt := time.Now()
+	claimedAt := futureClaimTime()
 	claimed, ok, err := store.Claim(context.Background(), claimedAt, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -1600,6 +1600,13 @@ func openJobsDB(t *testing.T, path string) *sql.DB {
 	return db
 }
 
+// futureClaimTime returns a claim timestamp one second ahead of the wall
+// clock. Beyond reading naturally as "now, but claimable", the margin keeps
+// Claim's run_after/locked_at comparisons on opposite sides of a seconds
+// digit: timestamps are stored as RFC3339Nano text with trailing zeros
+// stripped, so a claim time sampled microseconds after Enqueue's run_after
+// can order lexicographically backwards (...00.1Z sorts above
+// ...00.100000001Z) and intermittently miss the claim.
 func futureClaimTime() time.Time {
 	return time.Now().Add(time.Second)
 }
