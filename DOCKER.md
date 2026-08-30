@@ -171,6 +171,15 @@ curl http://127.0.0.1:8080/api/health
 For rollback, restore a matching database + media backup before running the
 older image.
 
+### In-app self-update (not available in containers)
+
+Kapsel's self-update feature (`KAPSEL_UPDATE_REPO`, `KAPSEL_UPDATE_CHECK_INTERVAL`;
+see [`docs/deployment.md`](docs/deployment.md)) replaces the running binary on
+disk. In the image that binary lives at root-owned `/opt/kapsel/kapsel`, so
+update checks are pointless here — set `KAPSEL_UPDATE_CHECK_INTERVAL=0s` in
+`deploy/docker/kapsel.env` to skip them and upgrade by pulling a new image
+instead:
+
 ## Verify downloads and playback (smoke test)
 
 A full end-to-end check in the container, using the API (replace the

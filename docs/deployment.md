@@ -123,7 +123,55 @@ Future Linux or macOS backends can enforce the same command access model with st
 
 Kapsel migrations are forward-only. A newer binary upgrades older databases on startup after opening SQLite. If rollback is needed, restore a matching database and media backup before running an older binary.
 
-Recommended upgrade flow:
+### In-App Self-Update
+
+Kapsel can install its own releases. A background scheduler checks the GitHub repository configured with `KAPSEL_UPDATE_REPO` (default `mufflegyro/yummle`) every `KAPSEL_UPDATE_CHECK_INTERVAL` (default `24h`; set `0s` to disable the scheduled check — the manual "Check now" button in Settings still works).
+
+Discovered updates never install on their own. A pending offer appears in **Settings → Updates**, where an admin can approve or dismiss it. Approving enqueues an apply job that:
+
+1. Re-fetches the release by tag and refuses any tag or platform-asset mismatch.
+2. Verifies the downloaded binary's SHA-256 against the release's `checksums.txt`.
+3. Writes a full database backup into `<data dir>/backups/` and aborts the update if that backup fails or is empty.
+4. Atomically replaces the binary (the previous version is kept next to it as `kapsel.previous`) and restarts the server in place.
+
+Failure handling: the pipeline aborts before touching the binary when anything upstream fails, so a GitHub outage, a corrupted download, or a failing backup leaves the running archive untouched. Interrupted attempts are retried by the job runner (with exponential backoff across failed checks) and can be re-approved from the same panel. Each apply keeps up to 5 `pre-update-*.zip` snapshots in the backups directory; older ones are pruned automatically.
+
+Trust model note: the SHA-256 sidecar verifies the download was not corrupted, not that the release itself is trustworthy — the sidecar comes from the same release, so a compromised release/repo account would pass verification. Admin approval is the human trust gate. (Signing releases with minisign/cosign and pinning an out-of-band public key would harden this, but is out of scope for a single-operator archive.)
+
+Notes:
+
+- The binary path must be writable by the kapsel service user. In the Docker image the binary lives at root-owned `/opt/kapsel/kapsel`, so self-update reports a permission error there — update containers by pulling a new image instead.
+- If the process dies between the binary swap and the database commit, the next attempt reconciles: it sees the running binary already reports the target version and records the offer applied without downloading or swapping again (preserving the `.previous` rollback copy).
+- Development builds (no stamped version) never check or install updates.
+
+### Publishing A Release
+
+Releases are built and published by the `Release` workflow
+(`.github/workflows/release.yml`) when a `v*` tag is pushed:
+
+```sh
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+The workflow runs `go vet` and the test suite first — a release never
+publishes from a red build — then builds the embedded frontend,
+cross-compiles statically linked (CGO_ENABLED=0) plain `kapsel_<os>_<arch>`
+binaries for linux/amd64, linux/arm64, darwin/amd64, and darwin/arm64 with
+the tag stamped as the version, generates `checksums.txt`
+(`"<sha256>  <asset>"` per line), and attaches all artifacts to the GitHub
+release. Those names and formats are what the updater's asset selection and
+checksum verification expect — a release without the platform binary or its
+checksum line is skipped (or fails verification) rather than installed.
+Manual workflow runs build the same artifacts without publishing, for
+inspecting a candidate build (stamped `dev`, so they are never eligible for
+in-app updates).
+
+The release body comes from `release-notes/<tag>.md` in the tagged commit
+when that file exists (e.g. `release-notes/v1.2.0.md` for the `v1.2.0`
+tag); otherwise GitHub generates notes from the commit list.
+
+Recommended manual upgrade flow:
 
 ```sh
 sudo systemctl stop kapsel.service

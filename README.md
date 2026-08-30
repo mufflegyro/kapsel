@@ -15,6 +15,7 @@ Yummle is an opininated fork of Kapsel with a few extra features built on top. I
 - Search local metadata with SQLite FTS, including imported titles, descriptions, subtitles, and comments.
 - Back up and restore SQLite metadata separately from large media files.
 - Update yt-dlp to nightly automatically.
+- Offer self-updates from GitHub releases, applied only after explicit admin approval in Settings, with SHA-256 verification and a pre-update database backup.
 - Deploy as docker container with various .env tweaks.
 
 ## Requirements
@@ -78,6 +79,8 @@ Common settings:
 - `KAPSEL_FFMPEG_PATH`: path to `ffmpeg`, default `ffmpeg`.
 - `KAPSEL_SUBTITLES_ENABLED`: download video subtitles during downloads, default `true`. Set to `false` to skip subtitle fetching entirely (useful when YouTube rate-limits the subtitle endpoint with HTTP 429).
 - `KAPSEL_CHANNEL_AUTO_DOWNLOAD_INTERVAL`: minimum time between automatic checks of subscribed channels for new episodes, default `24h`. Set to a shorter duration (e.g. `6h`) for a faster cycle, or `0s` to disable the auto-download scheduler entirely. Per-channel checks are spaced out with random jitter based on each channel's last scan time, so many channels do not all fire at once.
+- `KAPSEL_UPDATE_REPO`: GitHub repository checked for new releases of Kapsel itself, default `mufflegyro/yummle`.
+- `KAPSEL_UPDATE_CHECK_INTERVAL`: how often to check that repository for a newer release, default `24h`. Set to `0s` to disable automatic checks (the `Check Now` button in Settings still works). See `docs/deployment.md` for how updates are approved and applied.
 
 Generate a password hash without putting the password in shell history:
 
