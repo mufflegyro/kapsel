@@ -121,15 +121,25 @@ jobs:
         run: |
           # A release-notes/<tag>.md file in the tagged commit becomes the
           # release body; otherwise GitHub generates notes from commits.
-          notes_args="--generate-notes"
-          if [ -f "release-notes/$GITHUB_REF_NAME.md" ]; then
-            notes_args="--notes-file release-notes/$GITHUB_REF_NAME.md"
+          # If the release already exists (the tag was re-pointed to fix
+          # release metadata) update it in place instead of failing.
+          notes_file="release-notes/$GITHUB_REF_NAME.md"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            edit_args=(--title "Yummle $GITHUB_REF_NAME")
+            if [ -f "$notes_file" ]; then
+              edit_args+=(--notes-file "$notes_file")
+            fi
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${edit_args[@]}"
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            create_args=(--title "Yummle $GITHUB_REF_NAME" --verify-tag)
+            if [ -f "$notes_file" ]; then
+              create_args+=(--notes-file "$notes_file")
+            else
+              create_args+=(--generate-notes)
+            fi
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" "${create_args[@]}"
           fi
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "kapsel $GITHUB_REF_NAME" \
-            --verify-tag \
-            $notes_args
 
       - name: Upload build artifacts (manual runs only)
         if: github.ref_type != 'tag'
