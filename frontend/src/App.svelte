@@ -11,6 +11,11 @@
   import '@videojs/html/video/player';
   import '@videojs/html/video/skin';
 
+  // The Yummle logo always opens the For You page: the explicit ?sort=watching
+  // overrides the sticky dropdown selection on the home route. The sticky
+  // selection itself stays untouched and remains what the sidebar Home link
+  // resolves to (it keeps navigating to plain '/').
+  const forYouHref = '/?sort=watching';
   const sidebarPrimary = [
     { label: 'Home', href: '/' },
     { label: 'Channels', href: '/channels' },
@@ -3156,7 +3161,7 @@
 <main class="app-shell" class:watch-mode={videoID}>
   <header class="topbar">
     <div class="brand-cluster">
-      <a class="brand" href="/" onclick={event => navigate(event, '/')}> <span class="brand-mark" aria-hidden="true"></span><span>Yummle</span></a>
+      <a class="brand" href={forYouHref} onclick={event => navigate(event, forYouHref)}> <span class="brand-mark" aria-hidden="true"></span><span>Yummle</span></a>
     </div>
 
     <form class="search-form" role="search" onsubmit={submitSearch}>

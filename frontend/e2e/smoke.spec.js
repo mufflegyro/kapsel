@@ -248,6 +248,32 @@ test('home sort selection sticks across navigation back to the home page', async
   await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('watching');
 });
 
+test('brand link opens For You while Home keeps the sticky sort', async ({ page }) => {
+  const homeSortRequests = [];
+  await page.route('**/api/home/videos?*', route => {
+    homeSortRequests.push(new URL(route.request().url()).searchParams.get('sort'));
+    return route.continue();
+  });
+
+  // Pick "Recently Downloaded" so the sticky selection differs from the default.
+  await page.goto('/');
+  await expect(page.getByLabel('Sort by')).toHaveValue('watching');
+  await page.getByLabel('Sort by').selectOption('downloaded');
+  await expect(page).toHaveURL(/sort=downloaded/);
+
+  // The Yummle logo always lands on For You and leaves the sticky choice alone.
+  await page.locator('a.brand').click();
+  await expect(page).toHaveURL(/\/\?sort=watching$/);
+  await expect(page.getByLabel('Sort by')).toHaveValue('watching');
+  await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('watching');
+
+  // The sidebar Home link still resolves to the sticky dropdown selection.
+  await page.locator('.side-nav').getByRole('link', { name: 'Home' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByLabel('Sort by')).toHaveValue('downloaded');
+  await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('downloaded');
+});
+
 test('home browse chrome shows feed position, aligned titles, and quieter explore links', async ({ page }) => {
   const videos = [
     {
@@ -2042,7 +2068,7 @@ test('watch player exposes persisted volume normalization control', async ({ pag
   await expect.poll(() => hasActiveAudioConnection(page, 'gain', 'destination')).toBe(true);
 
   await page.locator('a.brand').click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/\?sort=watching$/);
   await expect(page.getByTestId('library-route')).toBeVisible();
   await expect.poll(() => audioEventCount(page, 'close')).toBe(1);
   await expect.poll(() => activeAudioConnectionCount(page)).toBe(0);
