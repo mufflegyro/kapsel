@@ -59,10 +59,21 @@ jobs:
             echo "KAPSEL_VERSION=dev" >> "$GITHUB_ENV"
           fi
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Test
+        run: go test ./...
+
+      # The failing test names are re-emitted as check annotations so they
+      # are visible from the API without authentication.
+      - name: Report failing tests
+        if: failure()
         run: |
-          go vet ./...
-          go test ./...
+          go test ./... 2>&1 | grep -E '^--- FAIL|^    [a-z_]+\.go:[0-9]+:' | head -30 | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done
+          exit 0
 
       - name: Cross-compile release binaries
         env:

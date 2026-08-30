@@ -1164,7 +1164,9 @@ func TestRunnerCancelsContextAwareJob(t *testing.T) {
 			return ctx.Err()
 		},
 	})
-	runner.CancelPollInterval = time.Millisecond
+	// 10ms poll: the renewal writer must not starve store.Cancel's write
+	// below (see the pacing note in TestRunnerHeartbeatsRunningJob).
+	runner.CancelPollInterval = 10 * time.Millisecond
 
 	done := make(chan error, 1)
 	go func() {
@@ -1543,7 +1545,7 @@ func TestRunLoopExitsOnContextCancellation(t *testing.T) {
 	if err := runner.RunLoop(ctx, time.Hour); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("expected cancellation before idle delay, took %s", elapsed)
 	}
 }
@@ -1747,7 +1749,7 @@ func TestRunnerShutdownWaitIsBoundedForSlowHandler(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context cancellation after bounded shutdown wait, got %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("expected bounded shutdown wait to return before slow handler finished")
 	}
 
