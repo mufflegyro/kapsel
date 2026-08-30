@@ -1343,15 +1343,20 @@ func TestRunnerHeartbeatsRunningJob(t *testing.T) {
 			}
 		},
 	})
-	runner.StaleAfter = 5 * time.Millisecond
-	runner.CancelPollInterval = time.Millisecond
+	// paced so the renewal writer does not starve the competing Claim:
+	// a 1ms poll with a 5ms stale window can hold the write lock ~100% of
+	// the time on slow-fsync systems (CI runners), leaving Claim's
+	// BEGIN IMMEDIATE to time out with SQLITE_BUSY after its full
+	// busy_timeout instead of observing the (fresh) lease.
+	runner.StaleAfter = 100 * time.Millisecond
+	runner.CancelPollInterval = 10 * time.Millisecond
 
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.RunOnce(context.Background())
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	if claimed, ok, err := store.Claim(context.Background(), time.Now(), runner.StaleAfter); err != nil || ok {
 		t.Fatalf("expected heartbeat to prevent stale claim, ok=%v job=%#v err=%v", ok, claimed, err)
 	}
@@ -1408,15 +1413,19 @@ END`); err != nil {
 			}
 		},
 	})
-	runner.StaleAfter = 5 * time.Millisecond
-	runner.CancelPollInterval = time.Millisecond
+	// Same pacing rationale as TestRunnerHeartbeatsRunningJob above: a 1ms
+	// renewal loop can starve the competing Claim's BEGIN IMMEDIATE for its
+	// whole busy_timeout on slow-fsync systems, surfacing as SQLITE_BUSY
+	// instead of the expected not-stale outcome.
+	runner.StaleAfter = 100 * time.Millisecond
+	runner.CancelPollInterval = 10 * time.Millisecond
 
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.RunOnce(context.Background())
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	if claimed, ok, err := store.Claim(context.Background(), time.Now(), runner.StaleAfter); err != nil || ok {
 		closeFinish()
 		t.Fatalf("expected lease renewal to prevent stale claim despite progress update errors, ok=%v job=%#v err=%v", ok, claimed, err)
