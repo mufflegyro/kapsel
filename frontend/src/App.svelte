@@ -358,7 +358,18 @@
       params.delete('sort');
     }
     const query = params.toString();
-    setRoute(`${path}${query ? `?${query}` : ''}`);
+    const nextSearch = query ? `?${query}` : '';
+    if (nextSearch === locationSearch) {
+      // The URL already reflects this choice, so no route change fires.
+      // On the home page this happens when the picked sort equals the
+      // sticky default it just replaced (the ?sort param was already
+      // absent), so sync the displayed sort and refresh the list directly.
+      librarySort = videoSortFromSearch(locationSearch, value);
+      loadLibrary({ showLoading: false });
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      return;
+    }
+    setRoute(`${path}${nextSearch}`);
   }
 
   async function loadLibrary(options = {}) {

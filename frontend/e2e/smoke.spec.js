@@ -238,6 +238,14 @@ test('home sort selection sticks across navigation back to the home page', async
 
   await expect(page.getByLabel('Sort by')).toHaveValue('downloaded');
   await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('downloaded');
+
+  // Picking the original default while it is NOT the sticky default keeps
+  // the URL a bare "/" (no ?sort param change), but the list must still
+  // refresh with the newly picked sort instead of waiting for a manual
+  // reload.
+  await page.getByLabel('Sort by').selectOption('watching');
+  await expect(page.getByLabel('Sort by')).toHaveValue('watching');
+  await expect.poll(() => homeSortRequests[homeSortRequests.length - 1] ?? null).toBe('watching');
 });
 
 test('home browse chrome shows feed position, aligned titles, and quieter explore links', async ({ page }) => {
