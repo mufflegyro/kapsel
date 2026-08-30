@@ -155,3 +155,76 @@ func TestRemoveRegularMatchingRejectsChangedFile(t *testing.T) {
 		t.Fatalf("expected replacement file to remain, got %q", string(body))
 	}
 }
+
+func TestSameAssetDetectsInPlaceChanges(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	raw := "asset.bin"
+	assetPath := filepath.Join(root, raw)
+	if err := os.WriteFile(assetPath, []byte("0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, recorded, err := Lstat(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An untouched file stays identical even though os.SameFile would say
+	// so anyway.
+	_, current, err := Lstat(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameAsset(current, recorded) {
+		t.Fatal("expected untouched file to match its recorded identity")
+	}
+
+	// Size change with the mtime preserved: os.SameFile would accept this
+	// (same inode), sameAsset must not.
+	file, err := os.OpenFile(assetPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("extra"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(assetPath, recorded.ModTime(), recorded.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	_, current, err = Lstat(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameAsset(current, recorded) {
+		t.Fatal("expected a size change to break the identity match")
+	}
+
+	// Restored size but a new mtime must also break the match.
+	if err := os.Truncate(assetPath, 10); err != nil {
+		t.Fatal(err)
+	}
+	_, current, err = Lstat(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameAsset(current, recorded) {
+		t.Fatal("expected an mtime change to break the identity match")
+	}
+
+	// Fully restored file matches again.
+	if err := os.Chtimes(assetPath, recorded.ModTime(), recorded.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	_, current, err = Lstat(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameAsset(current, recorded) {
+		t.Fatal("expected the restored file to match its recorded identity")
+	}
+}

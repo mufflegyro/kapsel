@@ -110,6 +110,24 @@ func Open(root string, raw string) (string, *os.File, fs.FileInfo, error) {
 	return cleaned, file, openedInfo, nil
 }
 
+// sameAsset compares two stat results more strictly than os.SameFile:
+// besides device and inode it also compares size and modification time.
+// os.SameFile alone is not sufficient for change detection because
+// filesystems such as ext4 routinely reallocate the inode of a just-deleted
+// file to its replacement, which would make a remove-and-recreate look
+// unchanged. Size and mtime catch that case (and any other rewrite) while
+// remaining stable for an untouched file.
+func sameAsset(a fs.FileInfo, b fs.FileInfo) bool {
+	if !os.SameFile(a, b) {
+		return false
+	}
+	if a.Size() != b.Size() {
+		return false
+	}
+
+	return a.ModTime().Equal(b.ModTime())
+}
+
 func RemoveRegular(root string, raw string) (string, error) {
 	return RemoveRegularMatching(root, raw, nil)
 }
@@ -126,7 +144,7 @@ func RemoveRegularMatching(root string, raw string, expected fs.FileInfo) (strin
 	if !info.Mode().IsRegular() {
 		return "", ErrInvalid
 	}
-	if expected != nil && !os.SameFile(info, expected) {
+	if expected != nil && !sameAsset(info, expected) {
 		return "", ErrChanged
 	}
 	rootDir, err := os.OpenRoot(rootPath)
