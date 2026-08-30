@@ -121,7 +121,7 @@ Future Linux or macOS backends can enforce the same command access model with st
 
 ## Media Retention
 
-A retention job runs daily and deletes local media files the archive no longer keeps. Only the media file and its download record are removed; the video record (metadata, watch state) stays, so anything cleaned up can be re-downloaded later. Marking a video as **Keep forever** always protects it from cleanup.
+A retention job runs daily and deletes local media files the archive no longer keeps. Removal takes the media file and the record of the downloaded media — its `media_assets` entry and the video's media columns — while the video record (metadata, watch state, download history) stays, so anything cleaned up can be re-downloaded later. Marking a video as **Keep forever** always protects it from cleanup.
 
 - **Watched media is cleaned up.** Once a video is marked watched — via the watch toggle or by watched playback progress — its media is removed at the next daily run after `KAPSEL_RETENTION_WATCHED_AFTER` (default `24h`). This applies to every media origin: channel auto-downloads, manual downloads, and imports. The timer restarts on any watch-progress write, so a video being re-watched is not deleted mid-playback. Set `KAPSEL_RETENTION_WATCHED_AFTER=0s` to disable watched-media cleanup entirely.
 - **Stale channel auto-downloads are cleaned up.** Unstarted, unwatched auto-downloads beyond the newest 2 per channel are removed once older than 14 days. This rule never touches manual or imported media.
