@@ -7,7 +7,7 @@
   import SettingsDiagnosticsPanel from './routes/SettingsDiagnosticsPanel.svelte';
   import SettingsUpdatesPanel from './routes/SettingsUpdatesPanel.svelte';
   import WatchRoute from './routes/WatchRoute.svelte';
-  import { channelHref, channelInitial, isCatalogOnly, metadataLine, thumbnailFallback, thumbnailStyle, videoHref } from './display.js';
+  import { channelHref, channelInitial, formatDuration, isCatalogOnly, metadataLine, thumbnailFallback, thumbnailStyle, videoHref } from './display.js';
   import '@videojs/html/video/player';
   import '@videojs/html/video/skin';
 
@@ -200,6 +200,11 @@
   $: channelID = channelIDFromPath(path);
   $: playlistID = playlistIDFromPath(path);
   $: searchQuery = path === '/search' ? new URLSearchParams(locationSearch).get('q')?.trim() ?? '' : '';
+  $: searchDedupedResults = dedupeSearchResults(searchPage.results);
+  $: searchEpisodeResults = searchDedupedResults
+    .filter(result => (result.record?.type || result.owner_type) === 'video')
+    .sort(searchPublishedDesc);
+  $: searchSecondaryResults = searchDedupedResults.filter(result => (result.record?.type || result.owner_type) !== 'video');
   $: librarySort = videoSortFromSearch(locationSearch, defaultVideoSortForPath(path));
   $: libraryHideWatched = hideWatchedFromSearch(locationSearch, defaultHideWatchedForPath(path));
   $: routeKey = `${path}${locationSearch}`;
@@ -2297,6 +2302,37 @@
     return `${value} ${value === 1 ? 'job' : 'jobs'}`;
   }
 
+  function searchResultCountLabel(count) {
+    const value = Number(count) || 0;
+    return `${value} ${value === 1 ? 'result' : 'results'}`;
+  }
+
+  function dedupeSearchResults(results) {
+    const primaryFields = { video: 'title', channel: 'name', playlist: 'title' };
+    const seen = new Map();
+    for (const result of results) {
+      const type = result.record?.type || result.owner_type;
+      const key = `${type}-${result.record?.id || result.owner_id}`;
+      const existing = seen.get(key);
+      if (existing === undefined || result.field === primaryFields[type]) seen.set(key, result);
+    }
+    return [...seen.values()];
+  }
+
+  function searchMatchFieldLabel(result) {
+    if (!result?.field || result.field === 'title') return '';
+    if (result.field === 'description') return 'description';
+    if (result.field === 'text') return 'comments';
+    if (String(result.field).startsWith('text:')) return 'subtitles';
+    return String(result.field).replaceAll('_', ' ');
+  }
+
+  function searchPublishedDesc(a, b) {
+    const at = Date.parse(a.record?.published_at || '') || 0;
+    const bt = Date.parse(b.record?.published_at || '') || 0;
+    return bt - at;
+  }
+
   function libraryFeedCountLabel(count, total) {
     const visible = Number(count) || 0;
     if (visible <= 0) return '';
@@ -3531,7 +3567,8 @@
       </section>
     {:else if path === '/search'}
       <section class="search-page" aria-label="Search results">
-        <h1>{searchQuery ? `Search results for ${searchQuery}` : 'Search the archive'}</h1>
+        <h1>{searchQuery ? 'Search Results' : 'Search the archive'}</h1>
+        {#if searchQuery && searchPage.status === 'loaded'}<p class="search-subtitle" role="status">{searchResultCountLabel(searchDedupedResults.length)} for “{searchQuery}”</p>{/if}
         {#if searchPage.status === 'idle'}
           <div class="state">Use the search bar to find archived videos, channels, subtitles, and comments.</div>
         {:else if searchPage.status === 'loading'}
@@ -3541,19 +3578,38 @@
         {:else if searchPage.results.length === 0}
           <div class="state">No local results matched this query.</div>
         {:else}
-          <div class="result-list">
-            {#each searchPage.results as result}
-              <a href={resultHref(result)} onclick={event => navigate(event, resultHref(result))}>
-                <span class:has-thumbnail={!!result.record?.thumbnail_url} class="result-thumb" style={thumbnailStyle(result)} aria-hidden="true">{#if result.record?.thumbnail_url}<img src={result.record.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{resultFallback(result)}{/if}</span>
-                <div class="result-copy">
-                  <span>{resultMeta(result)}</span>
-                  <strong>{resultTitle(result)}</strong>
-                  <p>{@html result.snippet}</p>
-                  <small>{result.field}</small>
-                </div>
-              </a>
-            {/each}
-          </div>
+          {#if searchSecondaryResults.length > 0}
+            <section class="search-secondary" aria-label="Channel and playlist matches">
+              <h2>Channels &amp; playlists</h2>
+              <div class="result-list">
+                {#each searchSecondaryResults as result}
+                  <a href={resultHref(result)} onclick={event => navigate(event, resultHref(result))}>
+                    <span class:has-thumbnail={!!result.record?.thumbnail_url} class="result-thumb" style={thumbnailStyle(result)} aria-hidden="true">{#if result.record?.thumbnail_url}<img src={result.record.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{resultFallback(result)}{/if}</span>
+                    <div class="result-copy">
+                      <span>{resultMeta(result)}</span>
+                      <strong>{resultTitle(result)}</strong>
+                      <p>{@html result.snippet}</p>
+                      <small>{result.field}</small>
+                    </div>
+                  </a>
+                {/each}
+              </div>
+            </section>
+          {/if}
+          {#if searchEpisodeResults.length > 0}
+            <div class="video-grid search-episode-grid">
+              {#each searchEpisodeResults as result (result.owner_type + '-' + result.owner_id + '-' + result.field)}
+                <a class="episode-tile" href={resultHref(result)} onclick={event => navigate(event, resultHref(result))}>
+                  <span class:has-thumbnail={!!result.record?.thumbnail_url} class="episode-thumb" style={thumbnailStyle(result)} aria-hidden="true">{#if result.record?.thumbnail_url}<img src={result.record.thumbnail_url} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}{resultFallback(result)}{/if}{#if formatDuration(result.record?.duration_seconds)}<span class="duration-badge">{formatDuration(result.record?.duration_seconds)}</span>{/if}</span>
+                  <strong class="episode-title">{resultTitle(result)}</strong>
+                  {#if result.record?.channel?.name}<span class="episode-channel">{result.record.channel.name}</span>{/if}
+                  {#if searchMatchFieldLabel(result)}<span class="episode-field">Matched in {searchMatchFieldLabel(result)}</span>{/if}
+                </a>
+              {/each}
+            </div>
+          {:else if searchSecondaryResults.length > 0}
+            <p class="search-episodes-empty">No matching episodes in the archive yet.</p>
+          {/if}
         {/if}
       </section>
     {:else}

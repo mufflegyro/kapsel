@@ -544,8 +544,35 @@ test('critical archive flows render without network downloads', async ({ page })
 
   await page.getByRole('searchbox', { name: 'Search archive' }).fill('lunar smoke');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Search results for lunar smoke' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Search Results' })).toBeVisible();
+  await expect(page.getByText('1 result for “lunar smoke”')).toBeVisible();
   await expect(page.getByText('E2E Lunar Archive Smoke').first()).toBeVisible();
+  const searchEpisodeTile = page.locator('.search-episode-grid').getByRole('link').filter({ hasText: 'E2E Lunar Archive Smoke' });
+  await expect(searchEpisodeTile).toBeVisible();
+  await expect(searchEpisodeTile.locator('.duration-badge')).toHaveText('2:05');
+  await expect(page.locator('.search-episode-grid').getByRole('link')).toHaveCount(1);
+  await expect(page.locator('.search-secondary')).toHaveCount(0);
+
+  await page.getByRole('searchbox', { name: 'Search archive' }).fill('moondust');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Search Results' })).toBeVisible();
+  await expect(page.getByText('1 result for “moondust”')).toBeVisible();
+  await expect(page.locator('.search-episode-grid').getByText('Matched in description')).toBeVisible();
+
+  await page.getByRole('searchbox', { name: 'Search archive' }).fill('Catalog');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByText('2 results for “Catalog”')).toBeVisible();
+  const catalogTiles = page.locator('.search-episode-grid').getByRole('link');
+  await expect(catalogTiles).toHaveCount(2);
+  await expect(catalogTiles.nth(0)).toContainText('E2E Catalog Orbit Brief');
+  await expect(catalogTiles.nth(1)).toContainText('E2E Catalog Moon Brief');
+
+  await page.getByRole('searchbox', { name: 'Search archive' }).fill('E2E Test Channel');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Search Results' })).toBeVisible();
+  await expect(page.getByText('1 result for “E2E Test Channel”')).toBeVisible();
+  await expect(page.getByText('No matching episodes in the archive yet.')).toBeVisible();
+  await expect(page.locator('.search-secondary').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toBeVisible();
 
   await page.goto('/channels');
   await expect(page.getByRole('heading', { name: 'Channel library' })).toBeVisible();

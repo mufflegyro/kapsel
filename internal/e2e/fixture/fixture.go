@@ -119,6 +119,18 @@ ON CONFLICT(video_id) DO UPDATE SET position_seconds = excluded.position_seconds
 		`INSERT INTO search_documents (owner_type, owner_id, field, text)
 VALUES ('video', 'e2e-video', 'title', 'E2E Lunar Archive Smoke lunar smoke')
 ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', 'e2e-video', 'description', 'Deterministic archive fixture about moondust and lunar smoke')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', 'e2e-catalog-video', 'title', 'E2E Catalog Moon Brief')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', 'e2e-catalog-video-2', 'title', 'E2E Catalog Orbit Brief')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('channel', 'e2e-channel', 'name', 'E2E Test Channel')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
