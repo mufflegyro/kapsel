@@ -3,6 +3,7 @@
 # Agent tooling (kept local-only; not part of the repo)
 AGENTS.md
 DEVLOG.md
+.pi/
 
 .env
 .env.*
