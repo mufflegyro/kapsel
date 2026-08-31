@@ -681,6 +681,9 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := upsertSearchDocument(ctx, tx, "video", doc.ID, "description", doc.Description); err != nil {
 		return err
 	}
+	if err := denorm.SyncVideoChannelSearchDocument(ctx, tx, doc.ID, doc.Channel.Name, doc.Title); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
@@ -1030,7 +1033,14 @@ ON CONFLICT(id) DO UPDATE SET
 		return err
 	}
 
-	return upsertSearchDocument(ctx, db, "channel", id, "name", name)
+	if err := upsertSearchDocument(ctx, db, "channel", id, "name", name); err != nil {
+		return err
+	}
+
+	// Refresh the per-video channel search docs so a channel rename is
+	// reflected everywhere; the sync skips videos whose doc text already
+	// matches, keeping per-video import loops cheap.
+	return denorm.SyncChannelVideoSearchDocuments(ctx, db, id, name)
 }
 
 func upsertMediaAsset(ctx context.Context, db sqlRunner, ownerType string, ownerID string, kind string, path string) error {

@@ -37,6 +37,49 @@ func DeleteSearchDocumentsForOwner(ctx context.Context, db Runner, ownerType str
 	return err
 }
 
+// SyncVideoChannelSearchDocument writes the per-video channel search doc:
+// owner_type 'video', field 'channel', text "<channel name> <video title>".
+// Combining both strings lets AND-semantics multiword queries that pair a
+// channel with a topic ("adam stew island") match a single document. An empty
+// channel name deletes the doc, mirroring SyncSearchDocument.
+func SyncVideoChannelSearchDocument(ctx context.Context, db Runner, videoID string, channelName string, videoTitle string) error {
+	if strings.TrimSpace(channelName) == "" {
+		return DeleteSearchDocument(ctx, db, "video", videoID, "channel")
+	}
+
+	_, err := db.ExecContext(ctx, `
+INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', ?, 'channel', ? || ' ' || ?)
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, videoID, channelName, videoTitle)
+
+	return err
+}
+
+// SyncChannelVideoSearchDocuments writes (or refreshes) the per-video channel
+// search doc for every video belonging to a channel — the rename/backfill
+// path for SyncVideoChannelSearchDocument. Videos whose doc already holds the
+// expected text are left untouched, so calling this on every channel upsert
+// stays cheap even during per-video import loops.
+func SyncChannelVideoSearchDocuments(ctx context.Context, db Runner, channelID string, channelName string) error {
+	if strings.TrimSpace(channelName) == "" {
+		return nil
+	}
+
+	_, err := db.ExecContext(ctx, `
+INSERT INTO search_documents (owner_type, owner_id, field, text)
+SELECT 'video', v.id, 'channel', ? || ' ' || v.title
+FROM videos v
+WHERE v.channel_id = ?
+  AND (
+    SELECT d.text
+    FROM search_documents d
+    WHERE d.owner_type = 'video' AND d.owner_id = v.id AND d.field = 'channel'
+  ) IS NOT ? || ' ' || v.title
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, channelName, channelID, channelName)
+
+	return err
+}
+
 func SyncMediaAsset(ctx context.Context, db Runner, ownerType string, ownerID string, kind string, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return DeleteMediaAsset(ctx, db, ownerType, ownerID, kind)

@@ -139,6 +139,38 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateBackfillsVideoChannelSearchDocs(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	migrations := loadMigrationsForTest(t)
+	for _, migration := range migrations {
+		if migration.version >= 17 {
+			break
+		}
+		applyMigrationForTest(t, db, migration)
+	}
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('chan-1', 'chan-1', 'Island Workshop');
+INSERT INTO videos (id, external_id, channel_id, title) VALUES
+  ('vid-1', 'vid-1', 'chan-1', 'Remote island hike'),
+  ('vid-2', 'vid-2', 'chan-1', 'Cabin build'),
+  ('vid-3', 'vid-3', NULL, 'Orphan video');
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
+  ('video', 'vid-1', 'title', 'Remote island hike'),
+  ('video', 'vid-2', 'channel', 'Stale Channel Name Cabin build')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	assertScalar(t, db, "SELECT text FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", "Island Workshop Remote island hike", "vid-1")
+	assertScalar(t, db, "SELECT text FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", "Island Workshop Cabin build", "vid-2")
+	assertScalar(t, db, "SELECT count(*) FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", int64(0), "vid-3")
+}
+
 func TestMigrateDeduplicatesDownloadsBeforeUniqueIndex(t *testing.T) {
 	t.Parallel()
 

@@ -11,6 +11,7 @@ This issue is deliberately scoped as a product decision: the weights decide how 
 
 ## Requirements
 
+- **Index channel names onto video docs (channel fan-out) — landed 2026-08-31.** Live testing on 2026-08-31 showed why this is no longer optional: with multiword AND semantics, `adam stew island` returns 0 rows because no document contains all three tokens — Adam Stew's video docs carry "island" but not his name, and his channel docs carry his name but not "island". Combining a channel with a topic is a natural search and currently can never match. Fix: sync an extra search doc per video (owner_type `video`, field `channel`, text = channel name + video title) at import/sync, plus an idempotent backfill for existing archives, mirroring the existing denorm fan-out. Note the consequence to review: `adam stew` alone will then match all of that channel's videos (the channel row still leads on BM25 and appears in the secondary block; recency re-ranking then decides which videos surface first). [Delivered in the same release as the multiword fix; the combined name+title doc text is what lets channel+topic AND queries match.]
 - **Enlarge the candidate pool, re-rank after hydration.** The FTS `LIMIT` happens before hydration, so page-level reordering alone cannot fix this. Fetch a larger internal pool (e.g. top 200–400 by BM25), hydrate, then re-rank in Go and return the configured page.
 - **Re-rank score:** `rank = bm25 + recency_decay(age) + field_boost(title > description > caption/comment)`. Weights as named constants in `internal/search`; unit tests pin the ordering behavior, not magic numbers.
 - **Recency decay** should be gentle (e.g. a bounded bonus/penalty over years, not a cliff) so a strong title match from 2019 still beats a weak caption match from last week — exact balance is the product decision to confirm in review.
@@ -20,10 +21,12 @@ This issue is deliberately scoped as a product decision: the weights decide how 
 
 ## Acceptance Criteria
 
-- On an archive where "island" previously returned all-2016 pages, the first page includes recent videos containing the term in title or caption (e.g. Adam Stew's 2026 "…Remote Island" upload).
+- `adam stew island` returns Adam Stew's island videos (the 2026-08-27 "I Bought a Tiny Off-Grid Cabin on a Remote Island" among them) instead of 0 rows.
+- On an archive where "island" previously returned an all-2016-leaning page (live: 30 of the top 50 published 2021 or earlier, only 5 from 2026), the first page includes recent videos containing the term in title or caption.
+- The 2026-08-27 "…Remote Island" video, which live at #16 of 24 for `remote island` behind 15 older titles (and is absent from the top 50 of 260 for `island`), surfaces on the first page for those queries.
 - A caption-only match for a recent video can appear within the first page for a term that also matches many old titles (the exact threshold is part of the weight decision).
-- `go test ./internal/search/...` pins the re-ranking order with deterministic fixtures; existing tests stay green.
-- No FTS schema migration: `owner_type`/`field` already exist (unindexed columns usable as predicates), and re-ranking happens in Go after hydration.
+- `go test ./internal/search/...` pins the re-ranking order and the channel fan-out with deterministic fixtures; existing tests stay green.
+- No FTS schema migration: `owner_type`/`field` already exist (unindexed columns usable as predicates), re-ranking happens in Go after hydration, and the channel doc is just another row in `search_documents`.
 
 ## Related
 

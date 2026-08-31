@@ -131,6 +131,12 @@ ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 		`INSERT INTO search_documents (owner_type, owner_id, field, text)
 VALUES ('channel', 'e2e-channel', 'name', 'E2E Test Channel')
 ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('channel', 'e2e-channel', 'description', 'Deterministic channel for browser smoke tests')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('video', 'e2e-video', 'channel', 'E2E Test Channel E2E Lunar Archive Smoke')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

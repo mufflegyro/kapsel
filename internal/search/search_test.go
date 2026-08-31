@@ -104,6 +104,7 @@ INSERT INTO comments (id, video_id, text) VALUES ('comment-1', 'vid-1', 'Island 
 INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
   ('video', 'vid-1', 'title', 'Island walkthrough'),
   ('video', 'vid-1', 'description', 'An island hop diary'),
+  ('video', 'vid-1', 'channel', 'Island Workshop Island walkthrough'),
   ('subtitle', 'vid-1', 'text:en:downloaded', 'island chatter transcript'),
   ('comment', 'comment-1', 'text', 'Island vibes comment'),
   ('video', 'vid-2', 'title', 'Second island video'),
@@ -117,8 +118,8 @@ INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
 		t.Fatal(err)
 	}
 
-	if stats.Total != 7 {
-		t.Fatalf("expected 7 matching rows, got %d", stats.Total)
+	if stats.Total != 8 {
+		t.Fatalf("expected 8 matching rows, got %d", stats.Total)
 	}
 	// vid-1 folds its title/description/subtitle/comment docs into one owner,
 	// vid-2 and the channel add one each, and the members-only video is hidden.

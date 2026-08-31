@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"kapsel/internal/database"
+	"kapsel/internal/denorm"
 	"kapsel/internal/diskspace"
 	"kapsel/internal/jobs"
+	"kapsel/internal/search"
 )
 
 func TestImportTubeArchivistBackup(t *testing.T) {
@@ -52,9 +54,46 @@ func TestImportTubeArchivistBackup(t *testing.T) {
 	assertScalar(t, db, "SELECT text FROM subtitles WHERE video_id = ? AND language = ?", "A quiet lunar capsule floats past the archive.", "vid-1", "en")
 	assertScalar(t, db, "SELECT path FROM subtitles WHERE video_id = ? AND language = ?", "subtitles/vid-1.ja.vtt", "vid-1", "ja")
 	assertScalar(t, db, "SELECT count(*) FROM search_documents WHERE owner_type = 'subtitle' AND text LIKE '%lunar%'", int64(1))
+	assertScalar(t, db, "SELECT text FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", "Archive Workshop Kapsel Demo", "vid-1")
 	assertScalar(t, db, "SELECT text FROM comments WHERE id = ?", "A preserved cabinet of comments", "comment-1")
 	assertScalar(t, db, "SELECT parent_id FROM comments WHERE id = ?", "comment-1", "comment-2")
 	assertScalar(t, db, "SELECT count(*) FROM search_documents WHERE owner_type = 'comment' AND text LIKE '%cabinet%'", int64(1))
+}
+
+func TestUpsertChannelRewritesVideoChannelSearchDocs(t *testing.T) {
+	t.Parallel()
+
+	db := openImportDB(t)
+	ctx := context.Background()
+	if err := upsertChannel(ctx, db, "chan-1", "Old Name", "", "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, channel_id, title) VALUES
+  ('vid-1', 'vid-1', 'chan-1', 'Island hike'),
+  ('vid-2', 'vid-2', 'chan-1', 'Cabin build')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, video := range []struct{ id, title string }{{"vid-1", "Island hike"}, {"vid-2", "Cabin build"}} {
+		if err := denorm.SyncVideoChannelSearchDocument(ctx, db, video.id, "Old Name", video.title); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := upsertChannel(ctx, db, "chan-1", "New Name", "", "", false, true); err != nil {
+		t.Fatal(err)
+	}
+
+	assertScalar(t, db, "SELECT text FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", "New Name Island hike", "vid-1")
+	assertScalar(t, db, "SELECT text FROM search_documents WHERE owner_type = 'video' AND owner_id = ? AND field = 'channel'", "New Name Cabin build", "vid-2")
+
+	results, err := search.Search(ctx, db, search.Query{Term: "New Name island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].OwnerType != "video" || results[0].OwnerID != "vid-1" {
+		t.Fatalf("expected only vid-1 to match the renamed channel + topic query, got %#v", results)
+	}
 }
 
 func TestImportJobStoresReport(t *testing.T) {

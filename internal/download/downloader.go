@@ -2426,8 +2426,11 @@ func (d *Downloader) writeCatalogVideo(ctx context.Context, exec sqlExecutor, vi
 	if err := d.upsertSearch(ctx, exec, "video", video.ID, "title", videoTitle); err != nil {
 		return err
 	}
+	if err := d.upsertSearch(ctx, exec, "video", video.ID, "description", videoDescription); err != nil {
+		return err
+	}
 
-	return d.upsertSearch(ctx, exec, "video", video.ID, "description", videoDescription)
+	return denorm.SyncVideoChannelSearchDocument(ctx, exec, video.ID, video.ChannelName, videoTitle)
 }
 
 func (d *Downloader) videoSearchText(ctx context.Context, exec sqlExecutor, id string) (string, string, error) {
@@ -2949,6 +2952,9 @@ func (d *Downloader) ingest(ctx context.Context, metadata metadata, rawURL strin
 	if err := d.upsertSearch(ctx, tx, "video", videoID, "description", metadata.Description); err != nil {
 		return ingestResult{}, err
 	}
+	if err := denorm.SyncVideoChannelSearchDocument(ctx, tx, videoID, channelName, firstNonEmpty(metadata.Title, metadata.ID)); err != nil {
+		return ingestResult{}, err
+	}
 	if err := d.upsertDownload(ctx, tx, videoID, metadata, rawURL, payloadJSON, origin); err != nil {
 		return ingestResult{}, err
 	}
@@ -3441,10 +3447,15 @@ ON CONFLICT(id) DO UPDATE SET
 		return err
 	}
 	if strings.TrimSpace(description) != "" {
-		return d.upsertSearch(ctx, exec, "channel", id, "description", description)
+		if err := d.upsertSearch(ctx, exec, "channel", id, "description", description); err != nil {
+			return err
+		}
 	}
 
-	return nil
+	// Refresh the per-video channel search docs so a channel rename is
+	// reflected everywhere; the sync skips videos whose doc text already
+	// matches, keeping per-video import loops cheap.
+	return denorm.SyncChannelVideoSearchDocuments(ctx, exec, id, name)
 }
 
 func (d *Downloader) markChannelScanned(ctx context.Context, exec sqlExecutor, id string) error {
