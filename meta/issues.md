@@ -21,7 +21,7 @@
 - [ ] [Send Yummle videos to followed or favourited users (post-auth future feature)](issues/add-video-sharing-to-followed-or-favoured-users.md)
 - [x] [Add a Docker deployment for LAN/HTTPS use](issues/add-docker-lan-https-deployment.md)
 - [ ] [Add YouTube metadata search with add-to-archive actions](issues/add-youtube-metadata-search.md)
-- [ ] [Make Explore views show episodes instead of a channel list](issues/explore-views-show-episodes.md)
+- [x] [Make Explore views show episodes instead of a channel list](issues/explore-views-show-episodes.md) *(landed via the episode-first search results change — Explore links are just `/search?q=` shortcuts)*
 - [ ] [Manage sidebar Explore links: create from searches, remove existing ones](issues/add-explore-links-from-search.md) *(superseded by Explore menu link editor)*
 - [x] [Explore menu link editor: add, edit, and remove search links from a pop-up](issues/explore-menu-link-editor.md)
 - [x] [Make search results display as an episode thumbnail list instead of a channel list](issues/make-search-results-episode-first.md)
