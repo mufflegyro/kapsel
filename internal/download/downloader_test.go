@@ -3914,6 +3914,211 @@ func TestAutoDownloadRetentionKeepsUnwatchedAndProtectedMediaOfAnyOrigin(t *test
 	}
 }
 
+func TestAutoDownloadRetentionKeepsUnwatchedManualMediaByDefault(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t,
+		"videos/manual-chan-new.mp4",
+		"videos/manual-chan-mid.mp4",
+		"videos/manual-chan-old.mp4",
+		"videos/manual-standalone.mp4",
+		"videos/imported-unwatched.mp4",
+	)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "manualnew1", "2026-05-05", "videos/manual-chan-new.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualmid02", "2026-05-04", "videos/manual-chan-mid.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualold03", "2026-05-03", "videos/manual-chan-old.mp4", DownloadOriginManual, old)
+	// Channel-less manual download: a direct URL download with no channel.
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, title, published_at, duration_seconds, media_path, media_origin, media_downloaded_at, archived_at)
+VALUES ('manualsolo4', 'manualsolo4', 'Video manualsolo4', '2026-05-02', 120, 'videos/manual-standalone.mp4', ?, ?, ?)`, DownloadOriginManual, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO media_assets (owner_type, owner_id, kind, path) VALUES ('video', 'manualsolo4', 'media', 'videos/manual-standalone.mp4')"); err != nil {
+		t.Fatal(err)
+	}
+	seedImportedRetentionVideo(t, db, "importunwt5", "2026-05-01", "videos/imported-unwatched.mp4", old)
+
+	result, err := NewDownloader(db, Config{MediaRoot: mediaRoot}, nil).ApplyAutoDownloadRetention(context.Background(), RetentionOptions{Now: func() time.Time { return now }, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 0 || result.Checked != 0 {
+		t.Fatalf("expected no candidates for unwatched manual or imported media by default, got %#v", result)
+	}
+	for _, id := range []string{"manualnew1", "manualmid02", "manualold03", "manualsolo4", "importunwt5"} {
+		assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), id)
+	}
+}
+
+func TestRetentionIncludeManualOptsManualMediaIntoStaleCleanup(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t,
+		"videos/manual-chan-new.mp4",
+		"videos/manual-chan-mid.mp4",
+		"videos/manual-chan-old.mp4",
+		"videos/manual-started.mp4",
+		"videos/manual-keep-watched.mp4",
+		"videos/manual-standalone.mp4",
+		"videos/imported-unwatched.mp4",
+	)
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "manualnew1", "2026-05-05", "videos/manual-chan-new.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualmid02", "2026-05-04", "videos/manual-chan-mid.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualold03", "2026-05-03", "videos/manual-chan-old.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualstrt4", "2026-04-30", "videos/manual-started.mp4", DownloadOriginManual, old)
+	seedRetentionVideo(t, db, "manualkeep5", "2026-04-29", "videos/manual-keep-watched.mp4", DownloadOriginManual, old)
+	seedImportedRetentionVideo(t, db, "importunwt6", "2026-04-28", "videos/imported-unwatched.mp4", old)
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, title, published_at, duration_seconds, media_path, media_origin, media_downloaded_at, archived_at)
+VALUES ('manualsolo6', 'manualsolo6', 'Video manualsolo6', '2026-04-27', 120, 'videos/manual-standalone.mp4', ?, ?, ?)`, DownloadOriginManual, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO media_assets (owner_type, owner_id, kind, path) VALUES ('video', 'manualsolo6', 'media', 'videos/manual-standalone.mp4')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE videos SET keep_forever = 1 WHERE id = 'manualkeep5'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO user_progress (video_id, position_seconds, duration_seconds, watched, updated_at) VALUES ('manualstrt4', 12, 120, 0, ?)", old); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewDownloader(db, Config{MediaRoot: mediaRoot}, nil).ApplyAutoDownloadRetention(context.Background(), RetentionOptions{Now: func() time.Time { return now }, IncludeManual: true, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed != 2 || result.Checked != 2 {
+		t.Fatalf("expected only the third-ranked channel manual and the standalone manual removed, got %#v", result)
+	}
+	for _, id := range []string{"manualold03", "manualsolo6"} {
+		assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", id)
+		assertScalar(t, db, "SELECT media_origin FROM videos WHERE id = ?", MediaOriginImported, id)
+		assertScalar(t, db, "SELECT count(*) FROM media_assets WHERE owner_type = 'video' AND owner_id = ? AND kind = 'media'", int64(0), id)
+	}
+	for _, id := range []string{"manualnew1", "manualmid02", "manualstrt4", "manualkeep5", "importunwt6"} {
+		assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), id)
+	}
+	for _, path := range []string{"manual-chan-old.mp4", "manual-standalone.mp4"} {
+		if _, err := os.Stat(filepath.Join(mediaRoot, "videos", path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected opted-in manual media file %s to be removed, got %v", path, err)
+		}
+	}
+	for _, path := range []string{"manual-chan-new.mp4", "manual-chan-mid.mp4", "manual-started.mp4", "manual-keep-watched.mp4", "imported-unwatched.mp4"} {
+		if _, err := os.Stat(filepath.Join(mediaRoot, "videos", path)); err != nil {
+			t.Fatalf("expected protected manual media file %s to remain, got %v", path, err)
+		}
+	}
+}
+
+func TestRetentionIncludeManualConfigReachesRetentionJob(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	mediaRoot := writeDownloadFiles(t, "videos/manual-config.mp4")
+	old := time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, title, published_at, duration_seconds, media_path, media_origin, media_downloaded_at, archived_at)
+VALUES ('manualcfg01', 'manualcfg01', 'Video manualcfg', '2026-05-01', 120, 'videos/manual-config.mp4', ?, ?, ?)`, DownloadOriginManual, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO media_assets (owner_type, owner_id, kind, path) VALUES ('video', 'manualcfg01', 'media', 'videos/manual-config.mp4')"); err != nil {
+		t.Fatal(err)
+	}
+
+	runJob := func(downloader *Downloader) {
+		t.Helper()
+		job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{Type: RetentionJobType, PayloadJSON: `{}`, MaxAttempts: 1, RunAfter: time.Now().Add(-time.Second)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner := jobs.NewRunner(store, map[string]jobs.Handler{
+			RetentionJobType: downloader.HandleRetention,
+		})
+		if err := runner.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := store.Get(context.Background(), job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != jobs.StatusSucceeded {
+			t.Fatalf("expected succeeded retention job, got %#v", stored)
+		}
+	}
+
+	runJob(newTestDownloader(db, store, Config{MediaRoot: mediaRoot}, nil))
+	assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), "manualcfg01")
+	runJob(newTestDownloader(db, store, Config{MediaRoot: mediaRoot, RetentionIncludeManual: true}, nil))
+	assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", "manualcfg01")
+	assertScalar(t, db, "SELECT media_origin FROM videos WHERE id = ?", MediaOriginImported, "manualcfg01")
+	if _, err := os.Stat(filepath.Join(mediaRoot, "videos", "manual-config.mp4")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected opted-in manual media to be removed by the retention job, got %v", err)
+	}
+}
+
+func TestAutoDownloadRetentionRechecksManualOriginEligibilityBeforeDelete(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t, "videos/manual-recheck.mp4")
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	// Channel-less stale manual candidate: the default recheck must skip it,
+	// the opted-in recheck must still remove it.
+	if _, err := db.Exec(`
+INSERT INTO videos (id, external_id, title, published_at, duration_seconds, media_path, media_origin, media_downloaded_at, archived_at)
+VALUES ('manualrchk1', 'manualrchk1', 'Video manualrchk', '2026-05-01', 120, 'videos/manual-recheck.mp4', ?, ?, ?)`, DownloadOriginManual, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO media_assets (owner_type, owner_id, kind, path) VALUES ('video', 'manualrchk1', 'media', 'videos/manual-recheck.mp4')"); err != nil {
+		t.Fatal(err)
+	}
+	candidate := retentionCandidate{
+		VideoID:       "manualrchk1",
+		MediaPath:     "videos/manual-recheck.mp4",
+		DownloadedAt:  old,
+		MediaOrigin:   DownloadOriginManual,
+		StaleCutoff:   now.Add(-DefaultRetentionStaleAfter).Format(time.RFC3339Nano),
+		WatchedCutoff: now.Add(-DefaultRetentionWatchedAfter).Format(time.RFC3339Nano),
+	}
+
+	removed, err := NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("expected channel-less manual media to be skipped while the opt-in is off")
+	}
+	assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "videos/manual-recheck.mp4", "manualrchk1")
+
+	candidate.IncludeManual = true
+	removed, err = NewRetentionCleaner(db, mediaRoot).removeRetainedVideoMedia(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("expected opted-in channel-less manual media to be removed by the recheck")
+	}
+	assertScalar(t, db, "SELECT media_path FROM videos WHERE id = ?", "", "manualrchk1")
+	assertScalar(t, db, "SELECT media_origin FROM videos WHERE id = ?", MediaOriginImported, "manualrchk1")
+	if _, err := os.Stat(filepath.Join(mediaRoot, "videos", "manual-recheck.mp4")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected opted-in manual media file to be removed, got %v", err)
+	}
+}
+
 func TestAutoDownloadRetentionKeepsWatchedMediaNewerThanCutoffByFraction(t *testing.T) {
 	t.Parallel()
 
@@ -4136,14 +4341,14 @@ func TestRetentionSchedulerEnqueuesObservableCleanupJob(t *testing.T) {
 	db := openDownloadDB(t)
 	store := jobs.NewStore(db)
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
-	created, err := EnsureRetentionJobs(context.Background(), db, store, RetentionScheduleOptions{Now: func() time.Time { return now }})
+	created, err := EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created != 1 {
 		t.Fatalf("expected one retention job, got %d", created)
 	}
-	created, err = EnsureRetentionJobs(context.Background(), db, store, RetentionScheduleOptions{Now: func() time.Time { return now }})
+	created, err = EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4183,7 +4388,7 @@ func TestRetentionSchedulerIgnoresCancelRequestedActiveJobAfterInterval(t *testi
 		t.Fatal(err)
 	}
 
-	created, err := EnsureRetentionJobs(context.Background(), db, store, RetentionScheduleOptions{
+	created, err := EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{
 		Now: func() time.Time { return createdAt.Add(DefaultRetentionInterval + time.Hour) },
 	})
 	if err != nil {
@@ -4193,6 +4398,90 @@ func TestRetentionSchedulerIgnoresCancelRequestedActiveJobAfterInterval(t *testi
 		t.Fatalf("expected cancel-requested active job not to suppress replacement after interval, got %d", created)
 	}
 	assertScalar(t, db, "SELECT count(*) FROM jobs WHERE type = ?", int64(2), RetentionJobType)
+}
+
+// The scheduler's failure policy: a failed retention job re-arms at the next
+// tick (no exponential backoff) — the cleanup pass is local, idempotent, and
+// bounded, and a persistent failure stays visible as a failed job in the jobs
+// UI. The throttle only applies after success.
+func TestRetentionSchedulerRearmsAfterFailedJob(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	created, err := EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected initial retention job, got %d", created)
+	}
+	claimed, ok, err := store.Claim(context.Background(), now.Add(time.Second), time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("expected claimable retention job, ok=%v err=%v", ok, err)
+	}
+	if err := store.Fail(context.Background(), claimed.ID, errors.New("cleanup boom"), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even well inside the throttle interval, a failed run re-arms on the
+	// next scheduler tick instead of waiting out the full interval.
+	created, err = EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{
+		Now: func() time.Time { return now.Add(time.Minute) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected failed retention run to re-arm immediately, got %d", created)
+	}
+}
+
+// A succeeded retention run suppresses a new job until the interval elapses
+// (the active-job dedupe case is covered by the observable-cleanup test).
+func TestRetentionSchedulerThrottlesSucceededJobWithinInterval(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	now := time.Now().UTC()
+	created, err := EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected initial retention job, got %d", created)
+	}
+	claimed, ok, err := store.Claim(context.Background(), now.Add(time.Second), time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("expected claimable retention job, ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteWithResult(context.Background(), claimed.ID, `{"checked":0,"removed":0}`); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err = EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{Now: func() time.Time { return now.Add(time.Minute) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("expected no retention job within interval, got %d", created)
+	}
+
+	// Backdate the completed job past the interval, then the next pass is due.
+	if _, err := db.Exec("UPDATE jobs SET created_at = ?", now.Add(-DefaultRetentionInterval*2).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	created, err = EnsureRetentionJobs(context.Background(), store, RetentionScheduleOptions{
+		Now: func() time.Time { return now.Add(time.Hour) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("expected retention job after interval, got %d", created)
+	}
 }
 
 func TestRetentionJobRecordsCleanupResult(t *testing.T) {
@@ -4817,7 +5106,7 @@ func TestEnsureYTDLPUpdateJobsEnqueuesObservableJob(t *testing.T) {
 	store := jobs.NewStore(db)
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 
-	created, err := EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	created, err := EnsureYTDLPUpdateJobs(context.Background(), store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4826,7 +5115,7 @@ func TestEnsureYTDLPUpdateJobsEnqueuesObservableJob(t *testing.T) {
 	}
 
 	// An active update job suppresses duplicates.
-	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4842,7 +5131,7 @@ func TestEnsureYTDLPUpdateJobsWrapsAfterInterval(t *testing.T) {
 	store := jobs.NewStore(db)
 	now := time.Now().UTC()
 
-	created, err := EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
+	created, err := EnsureYTDLPUpdateJobs(context.Background(), store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4859,7 +5148,7 @@ func TestEnsureYTDLPUpdateJobsWrapsAfterInterval(t *testing.T) {
 	}
 
 	// A recent successful update suppresses a new job until the interval elapses.
-	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Minute) }})
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Minute) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4871,7 +5160,7 @@ func TestEnsureYTDLPUpdateJobsWrapsAfterInterval(t *testing.T) {
 	if _, err := db.Exec("UPDATE jobs SET created_at = ?", now.Add(-DefaultYTDLPUpdateInterval*2).UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	created, err = EnsureYTDLPUpdateJobs(context.Background(), db, store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Hour) }})
+	created, err = EnsureYTDLPUpdateJobs(context.Background(), store, YTDLPUpdateScheduleOptions{Now: func() time.Time { return now.Add(time.Hour) }})
 	if err != nil {
 		t.Fatal(err)
 	}

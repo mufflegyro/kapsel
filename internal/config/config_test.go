@@ -61,6 +61,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RetentionWatchedAfter != download.DefaultRetentionWatchedAfter {
 		t.Fatalf("expected default retention watched interval %s, got %s", download.DefaultRetentionWatchedAfter, cfg.RetentionWatchedAfter)
 	}
+	if cfg.RetentionIncludeManual {
+		t.Fatal("expected manual media retention opt-in to default to off")
+	}
 	if cfg.MinFreeSpaceBytes != diskspace.DefaultMinFreeBytes {
 		t.Fatalf("expected default free-space headroom %d, got %d", diskspace.DefaultMinFreeBytes, cfg.MinFreeSpaceBytes)
 	}
@@ -120,29 +123,30 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
-		"KAPSEL_ADDR":                    "127.0.0.1:9000",
-		"KAPSEL_AUTH_MODE":               "disabled",
-		"KAPSEL_AUTH_PASSWORD_HASH":      "$argon2id$v=19$m=65536,t=3,p=1$salt$hash",
-		"KAPSEL_AUTH_USERNAME":           "admin",
-		"KAPSEL_DATA_DIR":                "/srv/kapsel",
-		"KAPSEL_DB_PATH":                 "/srv/db/app.db",
-		"KAPSEL_IMPORT_ROOT":             "/srv/imports",
-		"KAPSEL_MEDIA_ROOT":              "/srv/media",
-		"KAPSEL_MEDIA_SIGNING_SECRET":    "secret",
-		"KAPSEL_MEDIA_URL_TTL":           "15m",
-		"KAPSEL_SESSION_SECRET":          "session-secret",
-		"KAPSEL_SESSION_COOKIE_SECURE":   "true",
-		"KAPSEL_SESSION_TTL":             "24h",
-		"KAPSEL_YTDLP_FORMAT":            "best[height<=480]",
-		"KAPSEL_YTDLP_PATH":              "/usr/local/bin/yt-dlp",
-		"KAPSEL_YTDLP_COOKIES_FILE":      "/etc/kapsel/youtube.cookies.txt",
-		"KAPSEL_YTDLP_SLEEP_INTERVAL":    "30s",
-		"KAPSEL_YTDLP_UPDATE_INTERVAL":   "12h",
-		"KAPSEL_MIN_FREE_SPACE":          "2GiB",
-		"KAPSEL_PREVIEWS_ENABLED":        "true",
-		"KAPSEL_SPONSORBLOCK_ENABLED":    "false",
-		"KAPSEL_FFMPEG_PATH":             "/usr/local/bin/ffmpeg",
-		"KAPSEL_RETENTION_WATCHED_AFTER": "1h",
+		"KAPSEL_ADDR":                     "127.0.0.1:9000",
+		"KAPSEL_AUTH_MODE":                "disabled",
+		"KAPSEL_AUTH_PASSWORD_HASH":       "$argon2id$v=19$m=65536,t=3,p=1$salt$hash",
+		"KAPSEL_AUTH_USERNAME":            "admin",
+		"KAPSEL_DATA_DIR":                 "/srv/kapsel",
+		"KAPSEL_DB_PATH":                  "/srv/db/app.db",
+		"KAPSEL_IMPORT_ROOT":              "/srv/imports",
+		"KAPSEL_MEDIA_ROOT":               "/srv/media",
+		"KAPSEL_MEDIA_SIGNING_SECRET":     "secret",
+		"KAPSEL_MEDIA_URL_TTL":            "15m",
+		"KAPSEL_SESSION_SECRET":           "session-secret",
+		"KAPSEL_SESSION_COOKIE_SECURE":    "true",
+		"KAPSEL_SESSION_TTL":              "24h",
+		"KAPSEL_YTDLP_FORMAT":             "best[height<=480]",
+		"KAPSEL_YTDLP_PATH":               "/usr/local/bin/yt-dlp",
+		"KAPSEL_YTDLP_COOKIES_FILE":       "/etc/kapsel/youtube.cookies.txt",
+		"KAPSEL_YTDLP_SLEEP_INTERVAL":     "30s",
+		"KAPSEL_YTDLP_UPDATE_INTERVAL":    "12h",
+		"KAPSEL_MIN_FREE_SPACE":           "2GiB",
+		"KAPSEL_PREVIEWS_ENABLED":         "true",
+		"KAPSEL_SPONSORBLOCK_ENABLED":     "false",
+		"KAPSEL_FFMPEG_PATH":              "/usr/local/bin/ffmpeg",
+		"KAPSEL_RETENTION_WATCHED_AFTER":  "1h",
+		"KAPSEL_RETENTION_INCLUDE_MANUAL": "true",
 	}
 	cfg := loadFromLookup(func(key string) (string, bool) {
 		value, ok := env[key]
@@ -214,6 +218,9 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.RetentionWatchedAfter != time.Hour {
 		t.Fatalf("unexpected retention watched interval %s", cfg.RetentionWatchedAfter)
+	}
+	if !cfg.RetentionIncludeManual {
+		t.Fatal("expected manual media retention opt-in to be enabled")
 	}
 }
 

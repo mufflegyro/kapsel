@@ -297,6 +297,60 @@ LIMIT ?`, jobType, StatusQueued, StatusRunning, limit)
 	return jobs, nil
 }
 
+// HasActiveJobByType reports whether a queued or running job of the given type
+// exists that is not flagged for cancellation. Scheduling policy uses it to
+// dedupe periodic jobs (a cancel-requested job is being replaced, so it must
+// not suppress scheduling a replacement). This is one of the documented store
+// helpers through which scheduler policy reads the job table; raw job-table
+// queries outside this package are not allowed.
+func (s *Store) HasActiveJobByType(ctx context.Context, jobType string) (bool, error) {
+	return hasActiveJobByType(ctx, s.db, jobType)
+}
+
+func hasActiveJobByType(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobType string) (bool, error) {
+	var active bool
+	err := queryer.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM jobs
+  WHERE type = ?
+    AND status IN (?, ?)
+    AND cancel_requested = 0
+)`, jobType, StatusQueued, StatusRunning).Scan(&active)
+	if err != nil {
+		return false, err
+	}
+
+	return active, nil
+}
+
+// LatestJobOfType returns the most recently created job of the given type, or
+// false when none exists. Scheduling policy uses it for interval throttling:
+// compare the latest job's created_at against the schedule interval and decide
+// locally whether a new job is due (failures may re-arm immediately).
+func (s *Store) LatestJobOfType(ctx context.Context, jobType string) (Job, bool, error) {
+	return latestJobOfType(ctx, s.db, jobType)
+}
+
+func latestJobOfType(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobType string) (Job, bool, error) {
+	job, err := scanJob(queryer.QueryRowContext(ctx, selectJobSQL()+`
+WHERE type = ?
+ORDER BY created_at COLLATE RFC3339_NANO DESC, id DESC
+LIMIT 1`, jobType))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, false, nil
+	}
+	if err != nil {
+		return Job{}, false, err
+	}
+
+	return job, true, nil
+}
+
 func (s *Store) List(ctx context.Context, options ListOptions) (ListResult, error) {
 	page := options.Page
 	if page < 1 {

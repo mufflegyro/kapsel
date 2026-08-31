@@ -24,4 +24,18 @@ Auto-download retention currently applies only to videos in the `channel_auto` o
 
 - This is a follow-up to the implemented `add-auto-download-retention-policy.md` (auto-only) and `expire-watched-auto-downloads.md`.
 - Decision needed: implement as a global setting, a per-video flag, or both. A global setting is the smaller first step; per-video can be layered later.
+## Notes
+
+- This is a follow-up to the implemented `add-auto-download-retention-policy.md` (auto-only) and `expire-watched-auto-downloads.md`.
+- Decision needed: implement as a global setting, a per-video flag, or both. A global setting is the smaller first step; per-video can be layered later.
 - Retention cleanup runs via the scheduled hourly job; no new scheduler is required.
+
+## Resolution
+
+Implemented as a global operator opt-in, matching the established retention-config pattern (env-only, like `KAPSEL_RETENTION_WATCHED_AFTER` — the `settings` table remains unused). The watched branch was already origin-agnostic (per `expire-watched-auto-downloads`), so the gap was the stale branch, which was auto-only:
+
+- `KAPSEL_RETENTION_INCLUDE_MANUAL` (default off, `boolOrDefault`) → `config.RetentionIncludeManual` → `download.Config.RetentionIncludeManual` → merged in `ApplyAutoDownloadRetention` (operator opt-in cannot be revoked per call, mirroring the watched-cleanup opt-out).
+- With the opt-in, the stale branch widens in `retention.go`: channel-bound manual downloads join the per-channel newest-2 ranking (`media_origin IN ('channel_auto','manual')`), and channel-less manual downloads (direct URL, `channel_id IS NULL`) become eligible once unstarted + past the stale cutoff via a new `manual_unranked` arm. Started, watched-recent, and `keep_forever` protections are unchanged; imported media never join the stale branch.
+- Both eligibility queries (candidate scan + transactional recheck) now render from one shared `retentionEligibilityQuery` builder so the two can never drift; default mode renders byte-identical semantics to the previous hardcoded queries.
+
+Tests: `TestAutoDownloadRetentionKeepsUnwatchedManualMediaByDefault` (default off, all origins), `TestRetentionIncludeManualOptsManualMediaIntoStaleCleanup` (opted-in: third-ranked channel manual + channel-less manual removed; newest two, started, keep-forever, imported kept), `TestRetentionIncludeManualConfigReachesRetentionJob` (env flag through the real retention job path), `TestAutoDownloadRetentionRechecksManualOriginEligibility` (recheck-level default-off skip / opted-in removal), plus config parse assertions. Documented in `docs/deployment.md` and `deploy/kapsel.env.example`. Status: **landed 2026-08-31**.

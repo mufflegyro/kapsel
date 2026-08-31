@@ -41,6 +41,7 @@ const (
 	EnvSubtitlesEnabled            = "KAPSEL_SUBTITLES_ENABLED"
 	EnvChannelAutoDownloadInterval = "KAPSEL_CHANNEL_AUTO_DOWNLOAD_INTERVAL"
 	EnvRetentionWatchedAfter       = "KAPSEL_RETENTION_WATCHED_AFTER"
+	EnvRetentionIncludeManual      = "KAPSEL_RETENTION_INCLUDE_MANUAL"
 )
 
 const defaultYTDLPFormat = "bv[height<=1080][ext=mp4][vcodec^=avc1][acodec=none]+ba[ext=m4a][acodec^=mp4a]/b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]/b[height<=1080][ext=mp4]/best[height<=1080]"
@@ -83,6 +84,7 @@ type Config struct {
 	SubtitlesEnabled             bool
 	ChannelAutoDownloadInterval  time.Duration
 	RetentionWatchedAfter        time.Duration
+	RetentionIncludeManual       bool
 	UpdateRepo                   string
 	UpdateCheckInterval          time.Duration
 }
@@ -124,6 +126,7 @@ func loadFromLookup(lookup func(string) (string, bool), lookPath func(string) (s
 		SubtitlesEnabled:             boolOrDefault(lookup, EnvSubtitlesEnabled, true),
 		ChannelAutoDownloadInterval:  nonNegativeDurationOrDefault(lookup, EnvChannelAutoDownloadInterval, download.DefaultChannelAutoSyncInterval),
 		RetentionWatchedAfter:        nonNegativeDurationOrDefault(lookup, EnvRetentionWatchedAfter, download.DefaultRetentionWatchedAfter),
+		RetentionIncludeManual:       boolOrDefault(lookup, EnvRetentionIncludeManual, false),
 		YTDLPCookiesFile:             strings.TrimSpace(valueOrDefault(lookup, EnvYTDLPCookiesFile, "")),
 		YTDLPFormat:                  valueOrDefault(lookup, EnvYTDLPFormat, defaultYTDLPFormat),
 		YTDLPPath:                    valueOrDefault(lookup, EnvYTDLPPath, "yt-dlp"),

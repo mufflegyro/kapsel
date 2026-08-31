@@ -301,32 +301,25 @@ func (u *Updater) EnsureReleaseCheckJobs(ctx context.Context) (int, error) {
 	}
 	now := u.config.now().UTC()
 
-	var active bool
-	if err := u.db.QueryRowContext(ctx, `
-SELECT EXISTS(
-  SELECT 1
-  FROM jobs
-  WHERE type = ?
-    AND status IN (?, ?)
-    AND cancel_requested = 0
-)`, ReleaseCheckJobType, jobs.StatusQueued, jobs.StatusRunning).Scan(&active); err != nil {
+	// Scheduler job-table checks route through jobs.Store helpers — the
+	// updater owns policy (intervals, backoff) but not the job table.
+	active, err := u.store.HasActiveJobByType(ctx, ReleaseCheckJobType)
+	if err != nil {
 		return 0, err
 	}
 	if active {
 		return 0, nil
 	}
 
-	var latestCreatedAt string
-	var latestStatus jobs.Status
-	err := u.db.QueryRowContext(ctx, "SELECT created_at, status FROM jobs WHERE type = ? ORDER BY created_at DESC LIMIT 1", ReleaseCheckJobType).Scan(&latestCreatedAt, &latestStatus)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	latest, found, err := u.store.LatestJobOfType(ctx, ReleaseCheckJobType)
+	if err != nil {
 		return 0, err
 	}
-	if err == nil {
-		latest, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(latestCreatedAt))
+	if found {
+		latestCreated, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(latest.CreatedAt))
 		if parseErr == nil {
-			elapsed := now.Sub(latest.UTC())
-			if latestStatus == jobs.StatusFailed {
+			elapsed := now.Sub(latestCreated.UTC())
+			if latest.Status == jobs.StatusFailed {
 				streak, streakErr := u.consecutiveFailedChecks(ctx)
 				if streakErr != nil {
 					return 0, streakErr

@@ -63,7 +63,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	jobStore := jobs.NewStore(db)
 	authManager := auth.NewManager(auth.Config{Enabled: cfg.AuthMode != "disabled", Username: cfg.AuthUsername, PasswordHash: cfg.AuthPasswordHash, SessionSecret: cfg.SessionSecret, SessionTTL: cfg.SessionTTL, CookieSecure: cfg.SessionCookieSecure})
-	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore, RetentionWatchedCleanupDisabled: cfg.RetentionWatchedAfter == 0}, nil)
+	downloader := download.NewDownloader(db, download.Config{YTDLPPath: cfg.YTDLPPath, YTDLPCookiesFile: cfg.YTDLPCookiesFile, YTDLPSleepInterval: cfg.YTDLPSleepInterval, DataRoot: cfg.DataDir, MediaRoot: cfg.MediaRoot, FormatSelector: cfg.YTDLPFormat, MinFreeSpaceBytes: cfg.MinFreeSpaceBytes, PreviewsEnabled: cfg.PreviewsEnabled, SubtitlesEnabled: cfg.SubtitlesEnabled, FFMPEGPath: cfg.FFMPEGPath, JobStore: jobStore, RetentionWatchedCleanupDisabled: cfg.RetentionWatchedAfter == 0, RetentionIncludeManual: cfg.RetentionIncludeManual}, nil)
 	updaterService := updater.New(db, jobStore, updater.Config{
 		Repo:           cfg.UpdateRepo,
 		CurrentVersion: version.Version,
@@ -144,83 +144,51 @@ func (a *App) RunJobs(ctx context.Context) error {
 	if a == nil || a.Runner == nil {
 		return nil
 	}
+	// One fixed tick per scheduler family; whether a tick enqueues anything is
+	// scheduling policy owned by the domain packages' Ensure* functions (see
+	// docs/scheduler.md). All durable scheduled work is jobs, processed by the
+	// runner below — the loops here never execute domain work inline.
+	const schedulerTick = time.Hour
 	if a.Config.ChannelAutoDownloadInterval > 0 {
-		go a.runChannelAutoDownloadScheduler(ctx, time.Hour)
+		interval := a.Config.ChannelAutoDownloadInterval
+		go a.runPeriodicScheduler(ctx, "channel auto-download", schedulerTick, func(ctx context.Context) error {
+			_, err := download.EnsureChannelAutoDownloadJobs(ctx, a.DB, a.Jobs, download.ChannelAutoScheduleOptions{Interval: interval})
+			return err
+		})
 	}
-	go a.runRetentionScheduler(ctx, time.Hour)
-	go a.runYTDLPUpdateScheduler(ctx, time.Hour)
+	go a.runPeriodicScheduler(ctx, "retention", schedulerTick, func(ctx context.Context) error {
+		_, err := download.EnsureRetentionJobs(ctx, a.Jobs, download.RetentionScheduleOptions{})
+		return err
+	})
+	go a.runPeriodicScheduler(ctx, "yt-dlp update", schedulerTick, func(ctx context.Context) error {
+		_, err := download.EnsureYTDLPUpdateJobs(ctx, a.Jobs, download.YTDLPUpdateScheduleOptions{Interval: a.Config.YTDLPUpdateInterval})
+		return err
+	})
 	if a.Updater != nil && a.Config.UpdateCheckInterval > 0 {
-		go a.runUpdateCheckScheduler(ctx, time.Hour)
+		go a.runPeriodicScheduler(ctx, "release check", schedulerTick, func(ctx context.Context) error {
+			_, err := a.Updater.EnsureReleaseCheckJobs(ctx)
+			return err
+		})
 	}
 
 	return a.Runner.RunLoop(ctx, time.Second)
 }
 
-func (a *App) runUpdateCheckScheduler(ctx context.Context, tick time.Duration) {
+// runPeriodicScheduler owns only cadence and error reporting for one scheduler
+// family: it invokes the given ensure function on every tick and logs failures.
+// Whether a tick actually enqueues a job is scheduling policy inside the
+// domain package (dedupe, throttling, backoff); this loop never queries the
+// job table directly. Loop-level ticks are hourly regardless of the job
+// cadence so that each policy call can cheaply decide "nothing due".
+func (a *App) runPeriodicScheduler(ctx context.Context, name string, tick time.Duration, ensure func(context.Context) error) {
 	if tick <= 0 {
 		tick = time.Hour
 	}
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 	for {
-		if _, err := a.Updater.EnsureReleaseCheckJobs(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("release check scheduler failed", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (a *App) runYTDLPUpdateScheduler(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = time.Hour
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if _, err := download.EnsureYTDLPUpdateJobs(ctx, a.DB, a.Jobs, download.YTDLPUpdateScheduleOptions{Interval: a.Config.YTDLPUpdateInterval}); err != nil && ctx.Err() == nil {
-			slog.Error("yt-dlp update scheduler failed", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (a *App) runChannelAutoDownloadScheduler(ctx context.Context, tick time.Duration) {
-	if tick <= 0 {
-		tick = time.Hour
-	}
-	ticker := time.NewTicker(tick)
-	defer ticker.Stop()
-	for {
-		if _, err := download.EnsureChannelAutoDownloadJobs(ctx, a.DB, a.Jobs, download.ChannelAutoScheduleOptions{
-			Interval: a.Config.ChannelAutoDownloadInterval,
-		}); err != nil && ctx.Err() == nil {
-			slog.Error("channel auto-download scheduler failed", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (a *App) runRetentionScheduler(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = time.Hour
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if _, err := download.EnsureRetentionJobs(ctx, a.DB, a.Jobs, download.RetentionScheduleOptions{}); err != nil && ctx.Err() == nil {
-			slog.Error("retention scheduler failed", "error", err)
+		if err := ensure(ctx); err != nil && ctx.Err() == nil {
+			slog.Error(name+" scheduler failed", "error", err)
 		}
 		select {
 		case <-ctx.Done():

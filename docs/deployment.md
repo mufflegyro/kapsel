@@ -124,9 +124,9 @@ Future Linux or macOS backends can enforce the same command access model with st
 A retention job runs daily and deletes local media files the archive no longer keeps. Removal takes the media file and the record of the downloaded media — its `media_assets` entry and the video's media columns — while the video record (metadata, watch state, download history) stays, so anything cleaned up can be re-downloaded later. Marking a video as **Keep forever** always protects it from cleanup.
 
 - **Watched media is cleaned up.** Once a video is marked watched — via the watch toggle or by watched playback progress — its media is removed at the next daily run after `KAPSEL_RETENTION_WATCHED_AFTER` (default `24h`). This applies to every media origin: channel auto-downloads, manual downloads, and imports. The timer restarts on any watch-progress write, so a video being re-watched is not deleted mid-playback. Set `KAPSEL_RETENTION_WATCHED_AFTER=0s` to disable watched-media cleanup entirely.
-- **Stale channel auto-downloads are cleaned up.** Unstarted, unwatched auto-downloads beyond the newest 2 per channel are removed once older than 14 days. This rule never touches manual or imported media.
+- **Stale channel auto-downloads are cleaned up.** Unstarted, unwatched auto-downloads beyond the newest 2 per channel are removed once older than 14 days. This rule never touches imported media, and it leaves manual media alone unless you opt in with `KAPSEL_RETENTION_INCLUDE_MANUAL=1`. With the opt-in, channel-bound manual downloads compete for the same newest-2-per-channel slots as auto-downloads, and channel-less manual downloads (direct URL downloads) become eligible once unstarted and older than 14 days.
 
-The asymmetry is deliberate: media that was started but never finished, and unwatched manual or imported media, stay until they are watched (or marked Keep forever). Retention only ever shrinks what is already watched or superseded.
+The asymmetry is deliberate: media that was started but never finished, and unwatched manual or imported media, stay until they are watched (or marked Keep forever). Retention only ever shrinks what is already watched or superseded — the stale rule above is the one exception, and it stays scoped to auto-downloads unless you opt manual downloads in.
 
 ## Upgrades
 

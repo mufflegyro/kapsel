@@ -187,6 +187,58 @@ func TestClaimOrdersSameSecondFractionalRunAfter(t *testing.T) {
 	}
 }
 
+func TestSchedulerIntrospectionHelpers(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(openJobsDB(t, filepath.Join(t.TempDir(), "kapsel.db")))
+	ctx := context.Background()
+
+	// Empty table: nothing active, nothing latest.
+	if active, err := store.HasActiveJobByType(ctx, "download"); err != nil || active {
+		t.Fatalf("expected no active job on empty table, got active=%v err=%v", active, err)
+	}
+	if _, found, err := store.LatestJobOfType(ctx, "download"); err != nil || found {
+		t.Fatalf("expected no latest job on empty table, got found=%v err=%v", found, err)
+	}
+
+	active, err := store.Enqueue(context.Background(), EnqueueParams{Type: "download", MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.HasActiveJobByType(ctx, "download"); err != nil || !ok {
+		t.Fatalf("expected queued job to count as active, got active=%v err=%v", ok, err)
+	}
+	// A cancel-requested active job must not count as active for scheduling.
+	claimed, ok, err := store.Claim(context.Background(), futureClaimTime(), time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("expected claim, ok=%v err=%v", ok, err)
+	}
+	if err := store.Cancel(ctx, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.HasActiveJobByType(ctx, "download"); err != nil || ok {
+		t.Fatalf("expected cancel-requested running job not to count as active, got active=%v err=%v", ok, err)
+	}
+	latest, found, err := store.LatestJobOfType(ctx, "download")
+	if err != nil || !found || latest.ID != claimed.ID || latest.Status != StatusRunning {
+		t.Fatalf("expected latest job to be the claimed one, got found=%v err=%v job=%#v", found, err, latest)
+	}
+
+	// A second job created later wins the latest-by-created_at ranking even
+	// when its RFC3339Nano text has a fraction and the first does not.
+	second, err := store.Enqueue(context.Background(), EnqueueParams{Type: "download"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, found, err = store.LatestJobOfType(ctx, "download")
+	if err != nil || !found || latest.ID != second.ID {
+		t.Fatalf("expected latest job to be the newer one, got found=%v err=%v id=%s", found, err, latest.ID)
+	}
+	if latest.Status != StatusQueued || latest.CreatedAt == "" {
+		t.Fatalf("unexpected latest job: %#v", latest)
+	}
+}
+
 func TestFailStopsAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 
