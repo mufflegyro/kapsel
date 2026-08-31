@@ -601,6 +601,17 @@ test('critical archive flows render without network downloads', async ({ page })
   await expect(page.locator('.search-episode-grid').getByRole('link')).toHaveCount(50);
   await expect(page.locator('.search-secondary').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toBeVisible();
 
+  // Lazy loading: load more appends the remaining 5 distinct episodes, the
+  // label stays honest, and the control disappears once every owner is
+  // shown. Server-side dedupe keeps pages disjoint, so no tile repeats.
+  await expect(page.getByText('Showing 51 of 56 results.')).toBeVisible();
+  await page.getByTestId('search-load-more').click();
+  await expect(page.locator('.search-episode-grid').getByRole('link')).toHaveCount(55);
+  await expect(page.getByTestId('search-load-more')).toHaveCount(0);
+  await expect(page.getByText('56 results for “filler”')).toBeVisible();
+  const fillerTitles = await page.locator('.search-episode-grid .episode-title').allTextContents();
+  expect(new Set(fillerTitles).size).toBe(fillerTitles.length);
+
   await page.goto('/channels');
   await expect(page.getByRole('heading', { name: 'Channel library' })).toBeVisible();
   await expect(page.locator('.channel-list').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toContainText('Deterministic channel for browser smoke tests.');

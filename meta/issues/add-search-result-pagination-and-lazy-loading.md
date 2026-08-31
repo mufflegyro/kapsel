@@ -32,6 +32,28 @@
 > (~100 lines, mostly copied), smoke extension. No schema change.
 > Status: scoped, ready to implement on sign-off.
 
+> **Landed 2026-08-31.** Server: episodes deduplicate to display owners
+> after re-ranking (`dedupeResults`), so offset pages are disjoint and
+> complete — `page1 ∪ page2` covers the distinct set with no repeated
+> owner; the pool is sized at ~3 doc rows per owner the page needs
+> (`3×(limit+offset)+24`), bounded by `maxPoolDocs` = 2000 so deep-offset
+> requests hydrate a bounded number of rows. The channels & playlists
+> block dedupes by owner before its cap of 8 (a channel matching via name
+> and description docs takes one slot, represented by its name doc).
+> Frontend: `searchPage` carries `offset`/`hasMore`/`loadingMore`/
+> `loadMoreError`; `loadMoreSearch()` appends pages, advancing the offset
+> by the episode rows received; the auto-load sentinel mirrors the
+> library pattern (`searchInfiniteScroll`, rootMargin 600px) with a
+> visible "Load more" fallback, a polite status line ("Showing X of Y
+> results."), and stop conditions on a short page or when the received
+> owner count reaches `distinct_owners`. Verified on a real archive:
+> "island" (240 distinct owners) pages 50/50/50/50/40 with distinct rows
+> per page and a clean stop; smoke extends the filler fixture with
+> load-more assertions (grid 50 → 55, no duplicate tiles, label
+> unchanged, control disappears at the end). The fixture filler titles
+> also got fixed — the original Sprintf format produced identical
+> `%!d(BADINDEX)` titles, caught by the new tile-uniqueness assertion.
+
 ## Summary
 
 The search count is now honest (`total` / `distinct_owners` count the full match set), but the UI can never show more than the first page: `loadSearch()` issues a one-shot `GET /api/search?q=…&limit=50` and the search page has no load-more wiring. The endpoint itself has no pagination at all — `search.Query` is `{Term, Limit}` with `MaxLimit = 50` and no `offset`/`page` parameter — so on an archive with 256 distinct matches for "island", the label says 256 but only 50 tiles are reachable and scrolling loads nothing.
@@ -63,4 +85,4 @@ The search count is now honest (`total` / `distinct_owners` count the full match
 - No FTS or schema change: FTS5 returns every matched row and `offset` merely slices, so all distinct matches become reachable without touching the index.
 - Performance is unaffected by pagination: server cost is dominated by the FTS matched-set scan (measured on the live instance: ~13 ms at 260 matches, ~200 ms for ultra-common single tokens — both unscaled by `LIMIT`/`OFFSET`); the extra work per page is one bounded hydration query.
 - Open interplay with the re-rank proposal: when a re-ranked pool with a cap lands, the reachable count must not exceed the pool (raise the cap or cap the reported count at it). For "island" (256 distinct) a ~400 pool is fine.
-- Status: scoped 2026-08-31 (refresh above); not started; ready to implement on sign-off.
+- Status: delivered 2026-08-31.

@@ -181,13 +181,17 @@ func TestSearchHydratesArchiveRecords(t *testing.T) {
 	if playlist.Record.Title != "Kapsel playlist" || playlist.Record.Description != "Curated archive videos" {
 		t.Fatalf("expected hydrated playlist record, got %#v", playlist.Record)
 	}
-	subtitle := findResult(t, results, "subtitle", "vid-1")
+	subtitle := findResult(t, results, "video", "vid-1")
 	if subtitle.Record.Type != "video" || subtitle.Record.ID != "vid-1" || subtitle.Record.Title != "Kapsel walkthrough" {
 		t.Fatalf("expected subtitle to hydrate owning video, got %#v", subtitle.Record)
 	}
-	comment := findResult(t, results, "comment", "comment-1")
-	if comment.Record.Type != "video" || comment.Record.ID != "vid-1" || comment.Record.Title != "Kapsel walkthrough" {
-		t.Fatalf("expected comment to hydrate owning video, got %#v", comment.Record)
+	// Server-side dedupe collapses vid-1's title, subtitle, and comment docs
+	// into a single owner row (the highest-scored doc); the subtitle and
+	// comment docs must not surface as separate rows.
+	for _, result := range results {
+		if result.OwnerType == "subtitle" || result.OwnerType == "comment" {
+			t.Fatalf("expected subtitle/comment docs deduped into the video owner row, got %#v", result)
+		}
 	}
 }
 
@@ -715,5 +719,142 @@ func TestSearchSecondaryIndependentOfEpisodeVolume(t *testing.T) {
 	pageTwoSecondary := pageTwo[len(pageTwo)-1]
 	if pageTwoSecondary.OwnerID != "chan-gaming" {
 		t.Fatalf("expected the same channel row on the offset page, got %#v", pageTwoSecondary)
+	}
+}
+
+// A video matching via several docs (title, description, channel doc) must
+// occupy one window slot, not several: pages hold distinct display owners,
+// represented by their highest-scored doc.
+func TestSearchDedupesEpisodeDocsToOwnersPerPage(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	seedDatedVideo(t, db, "vid-dup", "title", "Island", now.Add(-48*time.Hour))
+	if _, err := db.Exec(`
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
+  ('video', 'vid-dup', 'description', 'An island travel diary with extra words'),
+  ('video', 'vid-dup', 'channel', 'Island Workshop Island')`); err != nil {
+		t.Fatal(err)
+	}
+	seedDatedVideo(t, db, "vid-solo", "title", "Island too", now.Add(-48*time.Hour))
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected one row per owner, got %d rows: %#v", len(results), results)
+	}
+	if results[0].OwnerID != "vid-dup" || results[0].Field != "title" {
+		t.Fatalf("expected vid-dup represented by its title doc, got %#v", results[0])
+	}
+	if results[1].OwnerID != "vid-solo" {
+		t.Fatalf("expected vid-solo second, got %#v", results[1])
+	}
+}
+
+// Offset pages partition the distinct owners: page1 union page2 covers every
+// owner exactly once, even when each owner matches through several docs.
+func TestSearchPagesPartitionDistinctOwners(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 55 {
+		id := "vid-partition-" + fmt.Sprintf("%02d", i)
+		seedDatedVideo(t, db, id, "title", "Music"+strings.Repeat(" pad", i), now.Add(-48*time.Hour))
+		if _, err := db.Exec(
+			"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', ?, 'description', ?)",
+			id, "Music notes "+strconv.Itoa(i),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	collect := func(offset int) []string {
+		t.Helper()
+		results, err := Search(context.Background(), db, Query{Term: "music", Limit: 20, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(results))
+		for _, result := range results {
+			ids = append(ids, result.OwnerID)
+		}
+		return ids
+	}
+
+	pageOne := collect(0)
+	pageTwo := collect(20)
+	pageThree := collect(40)
+	if len(pageOne) != 20 || len(pageTwo) != 20 || len(pageThree) != 15 {
+		t.Fatalf("expected 20/20/15 distinct-owner pages, got %d/%d/%d", len(pageOne), len(pageTwo), len(pageThree))
+	}
+	seen := map[string]bool{}
+	for _, id := range append(append(append([]string{}, pageOne...), pageTwo...), pageThree...) {
+		if seen[id] {
+			t.Fatalf("owner %s appeared on two pages", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != 55 {
+		t.Fatalf("expected the union to cover all 55 owners, got %d", len(seen))
+	}
+}
+
+// The secondary cap counts distinct owners, not doc rows: a channel matching
+// via both its name and description docs takes one block slot, represented
+// by its name doc.
+func TestSearchSecondaryDedupeCountsOwnersNotDocs(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	seedChannelDoc(t, db, "chan-both", "name", "Music")
+	if _, err := db.Exec(
+		"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('channel', 'chan-both', 'description', 'Music archive')",
+	); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 7 {
+		seedChannelDoc(t, db, "chan-"+strconv.Itoa(i), "description", "Music channel "+strconv.Itoa(i))
+	}
+
+	results, err := Search(context.Background(), db, Query{Term: "music", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary := []Result{}
+	for _, result := range results {
+		if result.OwnerType == "channel" {
+			secondary = append(secondary, result)
+		}
+	}
+	if len(secondary) != 8 {
+		t.Fatalf("expected 8 distinct channel owners in the block, got %d: %#v", len(secondary), secondary)
+	}
+	if secondary[0].OwnerID != "chan-both" || secondary[0].Field != "name" {
+		t.Fatalf("expected chan-both represented by its name doc, got %#v", secondary[0])
+	}
+}
+
+// Deep offsets stay bounded: the pool caps at maxPoolDocs, so a page past
+// the reachable range returns an empty page without error (and without
+// hydrating unbounded rows).
+func TestSearchBoundedPoolReturnsEmptyPagePastReachable(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 20 {
+		seedDatedVideo(t, db, "vid-deep-"+strconv.Itoa(i), "title", "Island"+strings.Repeat(" pad", i), now.Add(-48*time.Hour))
+	}
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: MaxLimit, Offset: 9000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected an empty page past the reachable range, got %d rows", len(results))
 	}
 }

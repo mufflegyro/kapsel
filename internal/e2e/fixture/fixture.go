@@ -144,9 +144,10 @@ ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 	// empty (see restore-secondary-search-matches.md).
 	for i := range 55 {
 		id := fmt.Sprintf("e2e-filler-%02d", i)
+		title := fmt.Sprintf("Filler Episode %02d", i)
 		statements = append(statements,
-			fmt.Sprintf(`INSERT INTO videos (id, external_id, title, published_at, duration_seconds) VALUES ('%[1]s', '%[1]s', 'Filler Episode %[2]02d', '2010-01-01T00:00:00Z', 60) ON CONFLICT(id) DO UPDATE SET title = excluded.title, published_at = excluded.published_at, duration_seconds = excluded.duration_seconds`, id, i),
-			fmt.Sprintf(`INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', '%[1]s', 'title', 'Filler Episode %[2]02d') ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, id, i),
+			fmt.Sprintf(`INSERT INTO videos (id, external_id, title, published_at, duration_seconds) VALUES ('%s', '%s', '%s', '2010-01-01T00:00:00Z', 60) ON CONFLICT(id) DO UPDATE SET title = excluded.title, published_at = excluded.published_at, duration_seconds = excluded.duration_seconds`, id, id, title),
+			fmt.Sprintf(`INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', '%s', 'title', '%s') ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, id, title),
 		)
 	}
 	statements = append(statements,

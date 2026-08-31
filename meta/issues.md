@@ -27,7 +27,7 @@
 - [ ] [Explore menu link editor: add, edit, and remove search links from a pop-up](issues/explore-menu-link-editor.md)
 - [x] [Make search results display as an episode thumbnail list instead of a channel list](issues/make-search-results-episode-first.md)
 - [x] [Restore channel and playlist matches to search results (secondary block cut by the episode window)](issues/restore-secondary-search-matches.md)
-- [ ] [Add search result pagination with lazy loading](issues/add-search-result-pagination-and-lazy-loading.md)
+- [x] [Add search result pagination with lazy loading](issues/add-search-result-pagination-and-lazy-loading.md)
 - [x] [Re-rank search results with recency and field weights](issues/re-rank-search-with-recency-and-field-weights.md)
 - [x] [Mark members-only videos and disable their download](issues/mark-members-only-videos.md)
 - [x] [Hide members-only videos from all views](issues/hide-members-only-videos.md)

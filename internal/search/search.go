@@ -26,6 +26,11 @@ const (
 // offset pages.
 const secondaryResultCap = 8
 
+// maxPoolDocs bounds the episode pool regardless of offset, so a deep (or
+// abusive) offset request hydrates a bounded number of rows instead of
+// growing linearly toward the offset clamp.
+const maxPoolDocs = 2000
+
 // secondaryPool is how many channel and playlist documents feed the
 // channels & playlists block. Because the block is queried independently of
 // the episode pool, a matching channel is never starved by the volume of
@@ -139,20 +144,25 @@ type ChannelInfo struct {
 	Name string `json:"name"`
 }
 
-// Search matches a term across two independent axes and windows Episodes:
+// Search matches a term across two independent axes:
 //
 //   - Episodes (videos, subtitles, comments) are temporal: a BM25 pool of
-//     candidatePool documents feeds the re-ranker (relevance × field weight ×
-//     recency decay) and the offset/limit page is sliced from the result.
-//     The pool grows with the offset so deep pages stay reachable.
+//     candidate documents feeds the re-ranker (relevance × field weight ×
+//     recency decay) and the offset/limit page is sliced from the
+//     deduplicated re-ranked result. The pool grows with the offset so deep
+//     pages stay reachable, bounded by maxPoolDocs.
 //   - The channels & playlists block is non-temporal: matching channel and
 //     playlist documents are fetched from their own pool (secondaryPool),
 //     ordered by pure relevance — no recency, never competing with videos
-//     for pool or window slots — and capped at secondaryResultCap.
+//     for pool or window slots — deduplicated per owner and capped at
+//     secondaryResultCap.
 //
-// The two lists are concatenated in the response; the display layer renders
-// non-video rows as the separate channels & playlists block above the
-// episode grid.
+// Both axes deduplicate to display owners before slicing/capping: a video
+// matching via title, description, subtitle, and comment docs occupies one
+// window slot, not four, so offset pages stay coherent (every returned row
+// is a distinct owner and pages never repeat an owner). The two lists are
+// concatenated in the response; the display layer renders non-video rows as
+// the separate channels & playlists block above the episode grid.
 func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 	term := strings.TrimSpace(query.Term)
 	if term == "" {
@@ -171,9 +181,17 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 		offset = 0
 	}
 
-	pool := candidatePool
-	if pool < limit+offset {
-		pool = limit + offset
+	// The pool is sized in document rows but sliced after deduplication to
+	// display owners; most owners carry one to three docs (title,
+	// description, channel), so fetch roughly three rows per owner the page
+	// must cover, bounded to keep deep-offset hydration cheap.
+	wanted := limit + offset
+	pool := 3*wanted + 24
+	if pool > maxPoolDocs {
+		pool = maxPoolDocs
+	}
+	if pool < candidatePool {
+		pool = candidatePool
 	}
 	match := matchExpression(term)
 
@@ -182,6 +200,7 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 		return nil, err
 	}
 	episodes = rerankResults(episodes)
+	episodes = dedupeResults(episodes)
 	episodes = paginateResults(episodes, offset, limit)
 
 	secondary, err := searchPool(ctx, db, match, secondaryPool, `owner_type IN ('channel', 'playlist')`)
@@ -189,11 +208,32 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 		return nil, err
 	}
 	secondary = rerankResults(secondary)
+	secondary = dedupeResults(secondary)
 	if len(secondary) > secondaryResultCap {
 		secondary = secondary[:secondaryResultCap]
 	}
 
 	return append(episodes, secondary...), nil
+}
+
+// dedupeResults keeps the first result per display owner, dropping later
+// duplicates. Callers pass re-ranked rows, so the survivor is the
+// highest-scored doc for that owner (a video's title doc beats its
+// description doc; a channel's name doc beats its description doc). The
+// key is the hydrated record identity, which resolves subtitle and comment
+// docs to their owning video.
+func dedupeResults(results []Result) []Result {
+	seen := make(map[string]bool, len(results))
+	kept := results[:0]
+	for _, result := range results {
+		key := result.Record.Type + "-" + result.Record.ID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, result)
+	}
+	return kept
 }
 
 // searchPool fetches up to limit BM25-ranked search documents restricted to

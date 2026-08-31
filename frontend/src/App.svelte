@@ -26,6 +26,7 @@
   const sidebarExplore = ['Music', 'Gaming', 'Podcasts', 'Education'];
   const playbackProgressSyncInterval = 10000;
   const libraryPageSize = 50;
+  const searchPageSize = 50;
   const upNextPageSize = 12;
   const mediaURLPlaybackRefreshLeadMS = 30000;
   const playbackRateStorageKey = 'kapsel.playbackRate';
@@ -186,7 +187,7 @@
   let playlistCSVInput;
   let playlistURL = '';
   let playlistImportJob = { status: 'idle', job: null, error: '' };
-  let searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, error: '' };
+  let searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, offset: 0, hasMore: false, loadingMore: false, loadMoreError: '', error: '' };
   let commentsPage = { status: 'idle', videoID: '', comments: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let diagnostics = { status: 'idle', readiness: null, error: '' };
   let updates = { status: 'idle', summary: null, error: '' };
@@ -205,6 +206,8 @@
     .filter(result => (result.record?.type || result.owner_type) === 'video')
     .sort(searchPublishedDesc);
   $: searchSecondaryResults = searchDedupedResults.filter(result => (result.record?.type || result.owner_type) !== 'video');
+  $: searchCanLoadMore = searchPage.status === 'loaded' && searchPage.hasMore
+    && (searchPage.distinctOwners === null || searchEpisodeResults.length + searchSecondaryResults.length < searchPage.distinctOwners);
   $: librarySort = videoSortFromSearch(locationSearch, defaultVideoSortForPath(path));
   $: libraryHideWatched = hideWatchedFromSearch(locationSearch, defaultHideWatchedForPath(path));
   $: routeKey = `${path}${locationSearch}`;
@@ -841,18 +844,44 @@
   async function loadSearch(query) {
     const requestToken = ++searchRequestToken;
     if (query === '') {
-      searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, error: '' };
+      searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, offset: 0, hasMore: false, loadingMore: false, loadMoreError: '', error: '' };
       return;
     }
-    searchPage = { status: 'loading', query, results: [], distinctOwners: null, error: '' };
+    searchPage = { status: 'loading', query, results: [], distinctOwners: null, offset: 0, hasMore: false, loadingMore: false, loadMoreError: '', error: '' };
     try {
-      const response = await fetchJSON(`/api/search?q=${encodeURIComponent(query)}&limit=50`);
+      const response = await fetchJSON(`/api/search?q=${encodeURIComponent(query)}&limit=${searchPageSize}`);
       if (requestToken !== searchRequestToken) return;
       const distinctOwners = Number.isFinite(response?.distinct_owners) ? response.distinct_owners : null;
-      searchPage = { status: 'loaded', query, results: response.data ?? [], distinctOwners, error: '' };
+      const rows = response.data ?? [];
+      const episodeRows = rows.filter(result => (result.record?.type || result.owner_type) === 'video').length;
+      searchPage = { status: 'loaded', query, results: rows, distinctOwners, offset: episodeRows, hasMore: episodeRows === searchPageSize, loadingMore: false, loadMoreError: '', error: '' };
     } catch (error) {
       if (requestToken !== searchRequestToken) return;
-      searchPage = { status: 'error', query, results: [], distinctOwners: null, error: error.message };
+      searchPage = { status: 'error', query, results: [], distinctOwners: null, offset: 0, hasMore: false, loadingMore: false, loadMoreError: '', error: error.message };
+    }
+  }
+
+  async function loadMoreSearch() {
+    if (searchPage.status !== 'loaded' || !searchPage.hasMore || searchPage.loadingMore) return;
+    const query = searchPage.query;
+    const requestToken = ++searchRequestToken;
+    searchPage = { ...searchPage, loadingMore: true, loadMoreError: '' };
+    try {
+      const response = await fetchJSON(`/api/search?q=${encodeURIComponent(query)}&limit=${searchPageSize}&offset=${searchPage.offset}`);
+      if (requestToken !== searchRequestToken || searchPage.query !== query) return;
+      const rows = response.data ?? [];
+      const episodeRows = rows.filter(result => (result.record?.type || result.owner_type) === 'video').length;
+      searchPage = {
+        ...searchPage,
+        results: [...searchPage.results, ...rows],
+        offset: searchPage.offset + episodeRows,
+        hasMore: episodeRows === searchPageSize,
+        loadingMore: false,
+        loadMoreError: '',
+      };
+    } catch (error) {
+      if (requestToken !== searchRequestToken || searchPage.query !== query) return;
+      searchPage = { ...searchPage, loadingMore: false, loadMoreError: error.message };
     }
   }
 
@@ -2919,6 +2948,30 @@
     return { update, destroy: disconnect };
   }
 
+  // Search variant of the library sentinel: options carry the callback and
+  // the reactive enabled flag, since load-more state lives on searchPage.
+  function searchInfiniteScroll(node, options) {
+    let observer = null;
+
+    function disconnect() {
+      if (observer) observer.disconnect();
+      observer = null;
+    }
+
+    function update(next) {
+      disconnect();
+      if (!next.enabled || typeof IntersectionObserver === 'undefined') return;
+      observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) next.loadMore();
+      }, { rootMargin: '600px 0px' });
+      observer.observe(node);
+    }
+
+    update(options);
+
+    return { update, destroy: disconnect };
+  }
+
   function cinemaModeControl(node, active) {
     let button = null;
     let tooltip = null;
@@ -3612,6 +3665,23 @@
             </div>
           {:else if searchSecondaryResults.length > 0}
             <p class="search-episodes-empty">No matching episodes in the archive yet.</p>
+          {/if}
+          {#if searchCanLoadMore || searchPage.loadingMore || searchPage.loadMoreError}
+            <div class="library-load-more">
+              {#if searchPage.loadingMore}
+                <span role="status" aria-live="polite" data-testid="search-load-more-status">Loading more results...</span>
+              {:else if searchPage.loadMoreError}
+                <span role="alert" class="state-error" data-testid="search-load-more-status">Could not load more results: {searchPage.loadMoreError}</span>
+              {:else}
+                <span data-testid="search-load-more-status">Showing {searchEpisodeResults.length + searchSecondaryResults.length} of {searchPage.distinctOwners} results.</span>
+              {/if}
+              {#if searchCanLoadMore}
+                <button type="button" onclick={loadMoreSearch} disabled={searchPage.loadingMore} data-testid="search-load-more">Load more</button>
+                {#if !searchPage.loadMoreError}
+                  <div class="library-load-more-sentinel" aria-hidden="true" use:searchInfiniteScroll={{ enabled: searchCanLoadMore && !searchPage.loadingMore, loadMore: loadMoreSearch }}></div>
+                {/if}
+              {/if}
+            </div>
           {/if}
         {/if}
       </section>
