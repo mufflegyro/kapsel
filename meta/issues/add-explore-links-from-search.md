@@ -1,5 +1,11 @@
 # Manage sidebar Explore links: create from searches, remove existing ones
 
+> **Superseded 2026-08-31** by `explore-menu-link-editor.md` — the pop-up
+> editor (add + edit + remove from the menu) covers this issue's scope and
+> adds renaming; the search-page "Save to Explore" button it proposed is an
+> optional extension there. Kept for reference; see the new issue for the
+> current plan.
+
 ## Summary
 
 The sidebar "Explore" section currently renders a hardcoded list (`Music`, `Gaming`, `Podcasts`, `Education`) defined in `frontend/src/App.svelte`, where every entry is a shortcut to a plain search (`/search?q=<label>`). Make the list user-manageable in both directions: a search result page can save the current query as a new Explore link, and any Explore link (default or user-added) can be removed from the sidebar. The list is a per-browser UI preference, so it persists in localStorage under a `kapsel.*` key like the existing sticky UI choices.
