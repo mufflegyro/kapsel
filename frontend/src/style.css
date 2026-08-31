@@ -2561,6 +2561,33 @@ button.thumbnail-link:disabled {
   text-transform: uppercase;
 }
 
+/* The channels & playlists block can surface up to 8 cards; lay them out as
+   compact, responsive columns instead of a tall single-column list so they
+   don't push the episode grid far down the page. */
+.search-secondary .result-list {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  max-width: none;
+}
+
+.search-secondary .result-list a {
+  gap: 0.65rem;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  padding: 0.65rem 0.8rem;
+}
+
+.search-secondary .result-list p {
+  margin: 0.1rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-secondary .result-list strong {
+  line-height: 1.25;
+}
+
 .result-list mark {
   background: rgba(240, 200, 121, 0.28);
   border-radius: 0.25rem;
