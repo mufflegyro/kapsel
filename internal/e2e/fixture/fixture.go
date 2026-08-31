@@ -138,6 +138,21 @@ ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 VALUES ('video', 'e2e-video', 'channel', 'E2E Test Channel E2E Lunar Archive Smoke')
 ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`,
 	}
+	// A term matching many episodes plus a channel description doc exercises
+	// the secondary-block quota: without it, every window slot goes to
+	// recency-boosted episodes and the channels & playlists block renders
+	// empty (see restore-secondary-search-matches.md).
+	for i := range 55 {
+		id := fmt.Sprintf("e2e-filler-%02d", i)
+		statements = append(statements,
+			fmt.Sprintf(`INSERT INTO videos (id, external_id, title, published_at, duration_seconds) VALUES ('%[1]s', '%[1]s', 'Filler Episode %[2]02d', '2010-01-01T00:00:00Z', 60) ON CONFLICT(id) DO UPDATE SET title = excluded.title, published_at = excluded.published_at, duration_seconds = excluded.duration_seconds`, id, i),
+			fmt.Sprintf(`INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', '%[1]s', 'title', 'Filler Episode %[2]02d') ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, id, i),
+		)
+	}
+	statements = append(statements,
+		`INSERT INTO search_documents (owner_type, owner_id, field, text)
+VALUES ('channel', 'e2e-channel', 'description', 'Deterministic channel for browser smoke tests with filler episodes')
+ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`)
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("seed e2e data: %w", err)

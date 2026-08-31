@@ -17,6 +17,14 @@ const (
 	markEnd      = "\x1e"
 )
 
+// secondaryResultCap bounds the channel and playlist rows appended to every
+// search page regardless of the episode window. Non-video docs carry no
+// recency signal and lower field weights, so without a protected quota they
+// systematically lose the 50-row episode window and the channels & playlists
+// block renders empty for most queries. The quota is window-independent:
+// deterministic per query, never duplicated across offset pages.
+const secondaryResultCap = 8
+
 // candidatePool is how many BM25-ranked documents feed the Go-side
 // re-ranker. Re-ranking must see more than one page of BM25 order to
 // surface rows that recency and field weights would lift into the page
@@ -191,7 +199,29 @@ LIMIT ?`, matchExpression(term), pool)
 	}
 
 	results = rerankResults(results)
-	return paginateResults(results, offset, limit), nil
+	episodes, secondary := splitEpisodeAndSecondary(results)
+	return append(paginateResults(episodes, offset, limit), secondary...), nil
+}
+
+// splitEpisodeAndSecondary separates the re-ranked pool into episode rows
+// (anything resolving to a video — video, subtitle, and comment docs) and
+// secondary rows (channels and playlists). Episodes feed the offset/limit
+// window; the secondary rows keep their re-rank score order — channel name
+// docs (×3) lead description matches (×1) — and are capped so the block
+// stays small. Taking the cap in score order means a page never shows more
+// than secondaryResultCap non-video rows even when hundreds match.
+func splitEpisodeAndSecondary(results []Result) (episodes []Result, secondary []Result) {
+	episodes = make([]Result, 0, len(results))
+	for _, result := range results {
+		if result.Record.Type != "video" {
+			if len(secondary) < secondaryResultCap {
+				secondary = append(secondary, result)
+			}
+			continue
+		}
+		episodes = append(episodes, result)
+	}
+	return episodes, secondary
 }
 
 // rerankResults orders hydrated rows by re-rank score, descending: BM25

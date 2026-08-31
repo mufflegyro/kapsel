@@ -592,6 +592,15 @@ test('critical archive flows render without network downloads', async ({ page })
   await expect(page.getByText('No matching episodes in the archive yet.')).toBeVisible();
   await expect(page.locator('.search-secondary').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toBeVisible();
 
+  // A term matching 55 filler episodes plus a channel description doc: the
+  // episode window fills with 50 tiles and the channels & playlists block
+  // must still surface the channel card (restore-secondary-search-matches).
+  await page.getByRole('searchbox', { name: 'Search archive' }).fill('filler');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByText('56 results for “filler”')).toBeVisible();
+  await expect(page.locator('.search-episode-grid').getByRole('link')).toHaveCount(50);
+  await expect(page.locator('.search-secondary').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toBeVisible();
+
   await page.goto('/channels');
   await expect(page.getByRole('heading', { name: 'Channel library' })).toBeVisible();
   await expect(page.locator('.channel-list').getByRole('link').filter({ hasText: 'E2E Test Channel' })).toContainText('Deterministic channel for browser smoke tests.');

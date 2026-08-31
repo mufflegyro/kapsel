@@ -1,5 +1,22 @@
 # Restore channel and playlist matches to search results
 
+> **Landed 2026-08-31.** `Search` now splits the re-ranked pool before
+> slicing: episode rows (anything resolving to a video) feed the
+> offset/limit window exactly as before, while non-video rows (channels,
+> playlists) are appended after the window in re-rank score order, capped
+> at `secondaryResultCap = 8` (`internal/search/search.go`). The cap is
+> window-independent — deterministic per query, identical on every offset
+> page, never consuming episode slots. Verified on a real archive: `music`
+> (1012 matches) returns 50 episodes + the `sub art` / `Darko Audio` /
+> `Xander Ewald` channel cards; `playlist` shows its channel card again.
+> Known residual (tracked in `add-search-result-pagination-and-lazy-loading.md`,
+> not this issue): channel docs whose raw BM25 rank falls outside the
+> 200-doc pool are unavailable to the block — on the verification archive
+> only 3 of the matching channel descriptions sat inside the pool. Smoke
+> coverage: the fixture gained 55 filler episodes + a channel-description
+> match, and the smoke asserts a 50-tile window with a non-empty secondary
+> block for `filler` (56 results).
+
 ## Summary
 
 The search re-rank (5585876) merged videos, channels, and playlists into **one** re-ranked list and then sliced the 50-row page. Channel/playlist docs are therefore forced to win a slot against recency-boosted video titles — and they systematically lose, so the channels & playlists block is empty for most queries.
@@ -34,4 +51,4 @@ This contradicts the re-rank proposal's own recommendation (d): *"whether the se
 ## Notes
 
 - Residual tension to confirm in review: a description-only channel match is a weaker signal than a name/title match — but "weaker" justified hiding it behind 50 recency-boosted titles; the proposal's intent was that the secondary block *always* surfaces when something matches, in relevance order.
-- No schema, indexing, or frontend change expected. Status: open.
+- No schema, indexing, or frontend change expected. Status: delivered 2026-08-31.

@@ -523,3 +523,149 @@ func TestSearchOffsetWindow(t *testing.T) {
 	assertWindow(4, []string{"vid-4", "vid-5", "vid-6"})
 	assertWindow(50, []string{})
 }
+
+func seedChannelDoc(t *testing.T, db *sql.DB, channelID string, field string, text string) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		"INSERT INTO channels (id, external_id, name) VALUES (?, ?, ?)", channelID, channelID, text,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('channel', ?, ?, ?)",
+		channelID, field, text,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A channel description match ranked below the whole episode window must
+// still be returned with the page — the channels & playlists block would
+// otherwise render empty for any term that matches many videos.
+func TestSearchSecondaryReturnedBeyondEpisodeWindow(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 60 {
+		seedDatedVideo(t, db, "vid-music-"+fmt.Sprintf("%02d", i), "title", "Music", now.Add(-48*time.Hour))
+	}
+	seedChannelDoc(t, db, "chan-desc", "description", "A quiet music archive")
+
+	results, err := Search(context.Background(), db, Query{Term: "music", Limit: MaxLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != MaxLimit+1 {
+		t.Fatalf("expected a full episode window plus the channel row, got %d rows", len(results))
+	}
+	secondary := results[MaxLimit:]
+	if len(secondary) != 1 || secondary[0].OwnerType != "channel" || secondary[0].OwnerID != "chan-desc" {
+		t.Fatalf("expected the channel description row appended after the window, got %#v", secondary)
+	}
+	for _, result := range results[:MaxLimit] {
+		if result.Record.Type != "video" {
+			t.Fatalf("expected the window to hold only episodes, got %#v", result)
+		}
+	}
+}
+
+// The secondary block is capped: with more matching channel docs than the
+// quota, only the top-scored rows ride along.
+func TestSearchSecondaryQuotaCap(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	for i := range 12 {
+		seedChannelDoc(t, db, "chan-"+strconv.Itoa(i), "description", "Music channel "+strconv.Itoa(i))
+	}
+
+	results, err := Search(context.Background(), db, Query{Term: "music", Limit: MaxLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channels := 0
+	for _, result := range results {
+		if result.OwnerType == "channel" {
+			channels++
+		}
+	}
+	if channels != secondaryResultCap {
+		t.Fatalf("expected secondary quota of %d channel rows, got %d", secondaryResultCap, channels)
+	}
+}
+
+// The quota is window-independent: offset pages keep the same secondary
+// rows, so paging never hides or duplicates the channels & playlists block.
+func TestSearchSecondaryStableAcrossOffsetPages(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 60 {
+		seedDatedVideo(t, db, "vid-music-"+fmt.Sprintf("%02d", i), "title", "Music "+strings.Repeat("x", i), now.Add(-48*time.Hour))
+	}
+	seedChannelDoc(t, db, "chan-name", "name", "Music")
+	seedChannelDoc(t, db, "chan-desc", "description", "Music")
+
+	collectSecondary := func(offset int) []Result {
+		t.Helper()
+		results, err := Search(context.Background(), db, Query{Term: "music", Limit: MaxLimit, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondary := []Result{}
+		for _, result := range results {
+			if result.OwnerType == "channel" {
+				secondary = append(secondary, result)
+			}
+		}
+		return secondary
+	}
+
+	// Identical doc text: the name doc (×3) must outrank the description doc
+	// (×1), and both must ride along on every page unchanged.
+	firstPage := collectSecondary(0)
+	secondPage := collectSecondary(50)
+	if len(firstPage) != 2 || firstPage[0].OwnerID != "chan-name" || firstPage[1].OwnerID != "chan-desc" {
+		t.Fatalf("expected name doc ranked above description doc in the secondary block, got %#v", firstPage)
+	}
+	if len(secondPage) != 2 || secondPage[0].OwnerID != "chan-name" || secondPage[1].OwnerID != "chan-desc" {
+		t.Fatalf("expected the same secondary rows on offset pages, got %#v", secondPage)
+	}
+}
+
+// The episode window holds exactly limit rows whether or not secondary
+// matches exist — the quota never consumes episode slots.
+func TestSearchEpisodeWindowUnchangedBySecondaryMatches(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 12 {
+		seedDatedVideo(t, db, "vid-solo-"+strconv.Itoa(i), "title", "Music"+strings.Repeat(" pad", i), now.Add(-48*time.Hour))
+	}
+
+	solo, err := Search(context.Background(), db, Query{Term: "music", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(solo) != 10 {
+		t.Fatalf("expected 10 episodes with no secondary matches, got %d", len(solo))
+	}
+
+	seedChannelDoc(t, db, "chan-desc", "description", "A music archive")
+	withSecondary, err := Search(context.Background(), db, Query{Term: "music", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withSecondary) != 11 {
+		t.Fatalf("expected 10 episodes plus 1 secondary row, got %d", len(withSecondary))
+	}
+	for index, result := range withSecondary[:10] {
+		if result.OwnerID != solo[index].OwnerID {
+			t.Fatalf("expected unchanged episode order at %d, got %#v vs %#v", index, result, solo[index])
+		}
+	}
+}
