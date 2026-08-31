@@ -1631,10 +1631,13 @@ func openJobsDB(t *testing.T, path string) *sql.DB {
 // futureClaimTime returns a claim timestamp one second ahead of the wall
 // clock. Beyond reading naturally as "now, but claimable", the margin keeps
 // Claim's run_after/locked_at comparisons on opposite sides of a seconds
-// digit: timestamps are stored as RFC3339Nano text with trailing zeros
-// stripped, so a claim time sampled microseconds after Enqueue's run_after
-// can order lexicographically backwards (...00.1Z sorts above
-// ...00.100000001Z) and intermittently miss the claim.
+// digit: timestamps are stored as RFC3339Nano text, and before the
+// RFC3339_NANO collation (internal/database) a claim time sampled
+// microseconds after Enqueue's run_after could order lexicographically
+// backwards (...00.1Z sorts above ...00.100000001Z) and intermittently
+// miss the claim. The collation made the margin a plain safety margin
+// rather than a correctness requirement; it stays because a one-second
+// future claim reads unambiguously claimable.
 func futureClaimTime() time.Time {
 	return time.Now().Add(time.Second)
 }

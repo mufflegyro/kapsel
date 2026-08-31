@@ -1223,11 +1223,16 @@ func TestEnsureReleaseCheckJobsThrottlesSuccessfulChecks(t *testing.T) {
 		cfg.CheckInterval = 24 * time.Hour
 	})
 	ctx := context.Background()
-	start := time.Now().UTC().Truncate(time.Second)
 
 	if count, err := updater.EnsureReleaseCheckJobs(ctx); err != nil || count != 1 {
 		t.Fatalf("first run: count=%d err=%v", count, err)
 	}
+	// Claim with the live clock, sampled after the enqueue: the job's
+	// run_after is the scheduler's now() with a nanosecond fraction, and
+	// the RFC3339_NANO collation orders timestamps numerically, so the
+	// claim time must be at or after it. (A truncated-second claim time
+	// used to work only because BINARY order made ".fractionZ" < "Z".)
+	start := time.Now().UTC()
 	claimed, ok, err := updater.store.Claim(ctx, start, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
@@ -1253,13 +1258,16 @@ func TestEnsureReleaseCheckJobsBacksOffFailures(t *testing.T) {
 		cfg.CheckInterval = 24 * time.Hour
 	})
 	ctx := context.Background()
-	start := time.Now().UTC().Truncate(time.Second)
 
 	// One exhausted check attempt: 15m backoff before the scheduler tries
 	// again instead of re-enqueuing on every hourly tick.
 	if _, err := updater.store.Enqueue(ctx, jobs.EnqueueParams{Type: ReleaseCheckJobType, PayloadJSON: "{}", MaxAttempts: 1}); err != nil {
 		t.Fatal(err)
 	}
+	// Claim after the enqueue with the live clock — the job's run_after
+	// carries a nanosecond fraction and the RFC3339_NANO collation orders
+	// timestamps numerically (see the throttling test).
+	start := time.Now().UTC()
 	claimed, ok, err := updater.store.Claim(ctx, start, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
