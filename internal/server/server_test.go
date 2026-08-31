@@ -3981,6 +3981,9 @@ func TestSearchEndpointReturnsMatches(t *testing.T) {
 	if response.Limit != 5 {
 		t.Fatalf("expected response limit 5, got %d", response.Limit)
 	}
+	if response.Total != 1 || response.DistinctOwners != 1 {
+		t.Fatalf("expected single-row match counts, got total=%d distinct_owners=%d", response.Total, response.DistinctOwners)
+	}
 	if len(response.Data) == 0 {
 		t.Fatal("expected search results")
 	}
@@ -3990,6 +3993,37 @@ func TestSearchEndpointReturnsMatches(t *testing.T) {
 	}
 	if !strings.Contains(result.Snippet, "<mark>") {
 		t.Fatalf("expected highlighted snippet, got %q", result.Snippet)
+	}
+}
+
+func TestSearchEndpointMatchesMultiwordQueries(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	seedServerSearchDocuments(t, db)
+	if _, err := db.Exec("INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', 'vid-2', 'title', 'Kapsel and Workshop tour')"); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=Kapsel%20Workshop&limit=5", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(WithDatabase(db)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	var response searchResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	// "Kapsel Workshop" must AND the two tokens: only the vid-2 doc contains
+	// both, and not as the adjacent phrase. Phrase wrapping would return zero
+	// rows for this query.
+	if response.Total != 1 || response.DistinctOwners != 1 {
+		t.Fatalf("expected the doc holding both tokens, got total=%d distinct_owners=%d data=%#v", response.Total, response.DistinctOwners, response.Data)
+	}
+	if len(response.Data) != 1 || response.Data[0].OwnerID != "vid-2" {
+		t.Fatalf("expected vid-2 result, got %#v", response.Data)
 	}
 }
 

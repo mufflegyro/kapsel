@@ -559,6 +559,11 @@ test('critical archive flows render without network downloads', async ({ page })
   await expect(page.getByText('1 result for “moondust”')).toBeVisible();
   await expect(page.locator('.search-episode-grid').getByText('Matched in description')).toBeVisible();
 
+  await page.getByRole('searchbox', { name: 'Search archive' }).fill('archive fixture');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByText('1 result for “archive fixture”')).toBeVisible();
+  await expect(page.locator('.search-episode-grid').getByRole('link').filter({ hasText: 'E2E Lunar Archive Smoke' })).toBeVisible();
+
   await page.getByRole('searchbox', { name: 'Search archive' }).fill('Catalog');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByText('2 results for “Catalog”')).toBeVisible();

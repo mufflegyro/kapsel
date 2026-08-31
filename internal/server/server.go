@@ -1594,8 +1594,10 @@ type pagination struct {
 }
 
 type searchResponse struct {
-	Data  []search.Result `json:"data"`
-	Limit int             `json:"limit"`
+	Data           []search.Result `json:"data"`
+	Limit          int             `json:"limit"`
+	Total          int             `json:"total"`
+	DistinctOwners int             `json:"distinct_owners"`
 }
 
 type errorResponse struct {
@@ -1619,6 +1621,11 @@ func searchDocuments(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 			writeJSONError(w, "failed to search", http.StatusInternalServerError)
 			return
 		}
+		stats, err := search.Stats(r.Context(), db, term)
+		if err != nil {
+			writeJSONError(w, "failed to search", http.StatusInternalServerError)
+			return
+		}
 		for index := range results {
 			if signed := mediaURLs.SignedURL(results[index].Record.ThumbnailPath); signed != "" {
 				results[index].Record.ThumbnailURL = signed
@@ -1626,7 +1633,7 @@ func searchDocuments(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(searchResponse{Data: results, Limit: limit})
+		_ = json.NewEncoder(w).Encode(searchResponse{Data: results, Limit: limit, Total: stats.Total, DistinctOwners: stats.DistinctOwners})
 	}
 }
 

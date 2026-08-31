@@ -40,6 +40,93 @@ func TestSearchMatchesSeededDocuments(t *testing.T) {
 	}
 }
 
+func TestMatchExpressionQuotesTokensAndJoinsWithAnd(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		term string
+		want string
+	}{
+		{name: "single token", term: "island", want: `"island"`},
+		{name: "multiword", term: "adam stew island", want: `"adam" AND "stew" AND "island"`},
+		{name: "collapses whitespace", term: "  island   cabin  ", want: `"island" AND "cabin"`},
+		{name: "doubles embedded quotes", term: `say "hi" now`, want: `"say" AND """hi""" AND "now"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := matchExpression(tt.term); got != tt.want {
+				t.Fatalf("matchExpression(%q) = %q, want %q", tt.term, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSearchMultiwordQueryMatchesAllTokensAnywhere(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
+  ('video', 'vid-1', 'title', 'I Bought a Cabin on a Remote Island'),
+  ('video', 'vid-2', 'title', 'Island cabin build'),
+  ('video', 'vid-3', 'title', 'Cabin fever vlog')`); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := Search(context.Background(), db, Query{Term: "cabin island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertResult(t, results, "video", "vid-1")
+	assertResult(t, results, "video", "vid-2")
+	for _, result := range results {
+		if result.OwnerID == "vid-3" {
+			t.Fatalf("expected AND semantics to exclude documents missing a token, got %#v", result)
+		}
+	}
+}
+
+func TestSearchStatsCountRowsAndDistinctOwners(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO channels (id, external_id, name) VALUES ('chan-1', 'chan-1', 'Island Workshop');
+INSERT INTO videos (id, external_id, channel_id, title, description, duration_seconds) VALUES
+  ('vid-1', 'vid-1', 'chan-1', 'Island walkthrough', 'An island hop diary', 120),
+  ('vid-2', 'vid-2', 'chan-1', 'Second island video', '', 90),
+  ('mem-1', 'mem-1', 'chan-1', 'Members only island', '', 60);
+UPDATE videos SET members_only = 1 WHERE id = 'mem-1';
+INSERT INTO comments (id, video_id, text) VALUES ('comment-1', 'vid-1', 'Island vibes comment');
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
+  ('video', 'vid-1', 'title', 'Island walkthrough'),
+  ('video', 'vid-1', 'description', 'An island hop diary'),
+  ('subtitle', 'vid-1', 'text:en:downloaded', 'island chatter transcript'),
+  ('comment', 'comment-1', 'text', 'Island vibes comment'),
+  ('video', 'vid-2', 'title', 'Second island video'),
+  ('video', 'mem-1', 'title', 'Members only island'),
+  ('channel', 'chan-1', 'name', 'Island Workshop')`); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := Stats(context.Background(), db, "island")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if stats.Total != 7 {
+		t.Fatalf("expected 7 matching rows, got %d", stats.Total)
+	}
+	// vid-1 folds its title/description/subtitle/comment docs into one owner,
+	// vid-2 and the channel add one each, and the members-only video is hidden.
+	if stats.DistinctOwners != 3 {
+		t.Fatalf("expected 3 distinct owners, got %d", stats.DistinctOwners)
+	}
+}
+
 func TestSearchBoundsResultCount(t *testing.T) {
 	t.Parallel()
 

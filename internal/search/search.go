@@ -19,6 +19,12 @@ type Query struct {
 	Limit int
 }
 
+// MatchStats carries match-set counts for a search term.
+type MatchStats struct {
+	Total          int
+	DistinctOwners int
+}
+
 type Result struct {
 	OwnerType string  `json:"owner_type"`
 	OwnerID   string  `json:"owner_id"`
@@ -70,7 +76,7 @@ SELECT
 FROM search_documents_fts
 WHERE search_documents_fts MATCH ?
 ORDER BY rank
-LIMIT ?`, quoteMatch(term), limit)
+LIMIT ?`, matchExpression(term), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -346,8 +352,66 @@ func stringArgs(values []string) []any {
 	return args
 }
 
-func quoteMatch(term string) string {
-	return `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+// matchExpression builds the FTS5 MATCH expression for a search term. Each
+// whitespace-separated token is quoted (embedded quotes doubled) and the
+// tokens are AND-joined, so natural multiword queries like "island cabin"
+// match documents containing both tokens anywhere instead of only the exact
+// phrase. Single-token terms keep the plain quoted form.
+func matchExpression(term string) string {
+	tokens := strings.Fields(term)
+	quoted := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		quoted = append(quoted, `"`+strings.ReplaceAll(token, `"`, `""`)+`"`)
+	}
+	return strings.Join(quoted, " AND ")
+}
+
+// Stats summarizes the full match set for a term, independent of the page
+// the results endpoint returns. Total counts every matching search document;
+// DistinctOwners counts unique display owners — subtitle and comment docs
+// fold into their parent video — excluding members-only videos, mirroring
+// how hydrateResults shapes the returned page.
+func Stats(ctx context.Context, db *sql.DB, term string) (MatchStats, error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return MatchStats{}, nil
+	}
+	match := matchExpression(term)
+
+	var total int
+	if err := db.QueryRowContext(ctx, `
+SELECT count(*)
+FROM search_documents_fts
+WHERE search_documents_fts MATCH ?`, match).Scan(&total); err != nil {
+		return MatchStats{}, err
+	}
+
+	var distinctOwners int
+	if err := db.QueryRowContext(ctx, `
+SELECT count(DISTINCT display_key)
+FROM (
+  SELECT
+    CASE fts.owner_type
+      WHEN 'comment' THEN 'video:' || (SELECT c.video_id FROM comments c WHERE c.id = fts.owner_id)
+      WHEN 'subtitle' THEN 'video:' || fts.owner_id
+      ELSE fts.owner_type || ':' || fts.owner_id
+    END AS display_key,
+    fts.owner_type AS owner_type,
+    CASE fts.owner_type
+      WHEN 'comment' THEN (SELECT c.video_id FROM comments c WHERE c.id = fts.owner_id)
+      ELSE fts.owner_id
+    END AS resolved_id
+  FROM search_documents_fts fts
+  WHERE search_documents_fts MATCH ?
+)
+WHERE owner_type NOT IN ('video', 'subtitle', 'comment')
+   OR NOT EXISTS (
+     SELECT 1 FROM videos v WHERE v.id = resolved_id AND v.members_only = 1
+   )`, match).Scan(&distinctOwners); err != nil {
+		return MatchStats{}, err
+	}
+
+	return MatchStats{Total: total, DistinctOwners: distinctOwners}, nil
 }
 
 func safeSnippet(value string) string {

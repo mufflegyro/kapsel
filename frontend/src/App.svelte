@@ -186,7 +186,7 @@
   let playlistCSVInput;
   let playlistURL = '';
   let playlistImportJob = { status: 'idle', job: null, error: '' };
-  let searchPage = { status: 'idle', query: '', results: [], error: '' };
+  let searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, error: '' };
   let commentsPage = { status: 'idle', videoID: '', comments: [], pagination: { page: 1, page_size: 20, total: 0 }, error: '' };
   let diagnostics = { status: 'idle', readiness: null, error: '' };
   let updates = { status: 'idle', summary: null, error: '' };
@@ -841,17 +841,18 @@
   async function loadSearch(query) {
     const requestToken = ++searchRequestToken;
     if (query === '') {
-      searchPage = { status: 'idle', query: '', results: [], error: '' };
+      searchPage = { status: 'idle', query: '', results: [], distinctOwners: null, error: '' };
       return;
     }
-    searchPage = { status: 'loading', query, results: [], error: '' };
+    searchPage = { status: 'loading', query, results: [], distinctOwners: null, error: '' };
     try {
       const response = await fetchJSON(`/api/search?q=${encodeURIComponent(query)}&limit=50`);
       if (requestToken !== searchRequestToken) return;
-      searchPage = { status: 'loaded', query, results: response.data ?? [], error: '' };
+      const distinctOwners = Number.isFinite(response?.distinct_owners) ? response.distinct_owners : null;
+      searchPage = { status: 'loaded', query, results: response.data ?? [], distinctOwners, error: '' };
     } catch (error) {
       if (requestToken !== searchRequestToken) return;
-      searchPage = { status: 'error', query, results: [], error: error.message };
+      searchPage = { status: 'error', query, results: [], distinctOwners: null, error: error.message };
     }
   }
 
@@ -2333,6 +2334,8 @@
     return bt - at;
   }
 
+  $: searchResultCount = searchPage.status === 'loaded' && Number.isFinite(searchPage.distinctOwners) ? searchPage.distinctOwners : searchDedupedResults.length;
+
   function libraryFeedCountLabel(count, total) {
     const visible = Number(count) || 0;
     if (visible <= 0) return '';
@@ -3568,7 +3571,7 @@
     {:else if path === '/search'}
       <section class="search-page" aria-label="Search results">
         <h1>{searchQuery ? 'Search Results' : 'Search the archive'}</h1>
-        {#if searchQuery && searchPage.status === 'loaded'}<p class="search-subtitle" role="status">{searchResultCountLabel(searchDedupedResults.length)} for “{searchQuery}”</p>{/if}
+        {#if searchQuery && searchPage.status === 'loaded'}<p class="search-subtitle" role="status">{searchResultCountLabel(searchResultCount)} for “{searchQuery}”</p>{/if}
         {#if searchPage.status === 'idle'}
           <div class="state">Use the search bar to find archived videos, channels, subtitles, and comments.</div>
         {:else if searchPage.status === 'loading'}
