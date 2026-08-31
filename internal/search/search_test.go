@@ -858,3 +858,83 @@ func TestSearchBoundedPoolReturnsEmptyPagePastReachable(t *testing.T) {
 		t.Fatalf("expected an empty page past the reachable range, got %d rows", len(results))
 	}
 }
+
+// Cross-page partition with multi-doc owners: the construction places the
+// canonically-top owners' best docs OUTSIDE the offset-0 pool of the old
+// offset-dependent sizing, which is the only shape that diverges:
+//
+//   - 100 old owners (published 10y ago, recency decay ≈ 0.1) with short
+//     title+desc docs — all 200 of their docs occupy raw BM25 ranks
+//     0..199 (short docs first).
+//   - 50 fresh owners (published now, decay ≈ 1) with one LONG title doc
+//     each — raw ranks 200..249 (long docs last), but canonically the
+//     top-50: ×3 field weight × decay ≈ 1 dominates the old owners'
+//     decayed scores at any comparable length.
+//
+// With a query-fixed pool, every page slices the same canonical owner
+// list: page one is exactly the 50 fresh owners, and pages partition all
+// 150 owners with no duplicates. Under the previous offset-dependent
+// sizing this test fails: page one is computed from a 200-doc raw-BM25
+// pool that contains only old docs, so it serves old owners while the
+// fresh owners sit beyond the pool — and page two (larger pool) re-serves
+// the same old owners from the canonical list's [50:100] slice. The fresh
+// owners are never reachable and the pages overlap.
+func TestSearchEpisodePagesPartitionAcrossMultiDocOwners(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	aDecadeAgo := now.Add(-10 * 365 * 24 * time.Hour)
+	for i := range 100 {
+		id := "vid-pool-old-" + strconv.Itoa(i)
+		seedDatedVideo(t, db, id, "title", "alpha "+strings.Repeat("t ", i%3+1), aDecadeAgo)
+		if _, err := db.Exec(
+			"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', ?, 'description', ?)",
+			id, "alpha "+strings.Repeat("d ", i%3+4),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 50 {
+		id := "vid-pool-fresh-" + strconv.Itoa(i)
+		seedDatedVideo(t, db, id, "title", "alpha "+strings.Repeat("f ", 40+i), now)
+	}
+
+	collect := func(offset int) []string {
+		t.Helper()
+		results, err := Search(context.Background(), db, Query{Term: "alpha", Limit: 50, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, result := range results {
+			if result.OwnerType != "video" {
+				t.Fatalf("unexpected non-episode row on the episode axis: %#v", result)
+			}
+			ids = append(ids, result.Record.ID)
+		}
+		return ids
+	}
+
+	pages := [][]string{collect(0), collect(50), collect(100)}
+	if len(pages[0]) != 50 || len(pages[1]) != 50 || len(pages[2]) != 50 {
+		t.Fatalf("expected 50/50/50 pages, got %d/%d/%d", len(pages[0]), len(pages[1]), len(pages[2]))
+	}
+	for _, id := range pages[0] {
+		if !strings.HasPrefix(id, "vid-pool-fresh-") {
+			t.Fatalf("page one must be exactly the 50 fresh owners whose best docs sit beyond the old offset-0 pool; got old owner %s on page one", id)
+		}
+	}
+	seen := map[string]int{}
+	for p, page := range pages {
+		for _, id := range page {
+			if prev, dup := seen[id]; dup {
+				t.Fatalf("owner %s appears on pages %d and %d — pages are not a partition", id, prev, p)
+			}
+			seen[id] = p
+		}
+	}
+	if len(seen) != 150 {
+		t.Fatalf("expected the pages to cover all 150 owners, got %d", len(seen))
+	}
+}

@@ -37,13 +37,6 @@ const maxPoolDocs = 2000
 // matching videos; the bound only guards pathological archives.
 const secondaryPool = 1000
 
-// candidatePool is how many BM25-ranked video documents feed the Go-side
-// re-ranker. Re-ranking must see more than one page of BM25 order to
-// surface rows that recency and field weights would lift into the page
-// from deeper in the raw relevance order; 200 keeps the hydration and
-// scoring cost bounded on large archives.
-const candidatePool = 200
-
 // recencyHalfLife is the age at which a video document's relevance
 // contribution halves. Three years balances the two constraints from the
 // re-rank proposal: a strong title match from ~2019 must still beat a
@@ -149,8 +142,10 @@ type ChannelInfo struct {
 //   - Episodes (videos, subtitles, comments) are temporal: a BM25 pool of
 //     candidate documents feeds the re-ranker (relevance × field weight ×
 //     recency decay) and the offset/limit page is sliced from the
-//     deduplicated re-ranked result. The pool grows with the offset so deep
-//     pages stay reachable, bounded by maxPoolDocs.
+//     deduplicated re-ranked result. The pool is fixed per query (not
+//     per page): every page re-ranks the same candidate set, so the
+//     deduplicated owner list is canonical and pages partition it
+//     exactly — disjoint pages, no unreachable owners.
 //   - The channels & playlists block is non-temporal: matching channel and
 //     playlist documents are fetched from their own pool (secondaryPool),
 //     ordered by pure relevance — no recency, never competing with videos
@@ -181,18 +176,15 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 		offset = 0
 	}
 
-	// The pool is sized in document rows but sliced after deduplication to
-	// display owners; most owners carry one to three docs (title,
-	// description, channel), so fetch roughly three rows per owner the page
-	// must cover, bounded to keep deep-offset hydration cheap.
-	wanted := limit + offset
-	pool := 3*wanted + 24
-	if pool > maxPoolDocs {
-		pool = maxPoolDocs
-	}
-	if pool < candidatePool {
-		pool = candidatePool
-	}
+	// The episode pool is deliberately fixed per query. An offset-dependent
+	// pool re-ranks a different candidate set on every page, and an owner's
+	// position depends on which of its docs survive dedupe within the pool —
+	// pages then overlap and skip owners (measured on a live archive:
+	// 26 duplicate owners, 214 of 240 reachable). With one fixed pool the
+	// deduplicated list is identical for every page of the query. The FTS
+	// LIMIT only bounds matching rows, so small match sets hydrate
+	// proportionally; maxPoolDocs caps the worst case.
+	pool := maxPoolDocs
 	match := matchExpression(term)
 
 	episodes, err := searchPool(ctx, db, match, pool, `owner_type IN ('video', 'subtitle', 'comment')`)
@@ -300,7 +292,8 @@ func rerankScore(result Result, now time.Time) float64 {
 }
 
 // paginateResults applies the offset window to the re-ranked list. The
-// full ranked list is at most candidatePool long, so slicing is safe.
+// list is already deduplicated to display owners and bounded by
+// maxPoolDocs, so slicing is safe.
 func paginateResults(results []Result, offset int, limit int) []Result {
 	if offset >= len(results) {
 		return []Result{}

@@ -35,9 +35,10 @@
 > **Landed 2026-08-31.** Server: episodes deduplicate to display owners
 > after re-ranking (`dedupeResults`), so offset pages are disjoint and
 > complete — `page1 ∪ page2` covers the distinct set with no repeated
-> owner; the pool is sized at ~3 doc rows per owner the page needs
-> (`3×(limit+offset)+24`), bounded by `maxPoolDocs` = 2000 so deep-offset
-> requests hydrate a bounded number of rows. The channels & playlists
+> owner; the episode pool is fixed per query (`maxPoolDocs` = 2000) so
+> every page re-ranks and slices the same canonical owner list (see the
+> correction below for why a per-request pool size is wrong). The
+> channels & playlists
 > block dedupes by owner before its cap of 8 (a channel matching via name
 > and description docs takes one slot, represented by its name doc).
 > Frontend: `searchPage` carries `offset`/`hasMore`/`loadingMore`/
@@ -53,6 +54,31 @@
 > unchanged, control disappears at the end). The fixture filler titles
 > also got fixed — the original Sprintf format produced identical
 > `%!d(BADINDEX)` titles, caught by the new tile-uniqueness assertion.
+>
+> **Correction (same day, review finding):** the first cut sized the
+> episode pool per request (`3×(limit+offset)+24`) — every page re-ranked
+> a different candidate set, and an owner's deduped position depends on
+> which of its docs survive inside the pool, so pages overlapped (26
+> duplicate owners on a live `island` walk) and 26 owners were
+> unreachable ("Showing X of Y" stopped at 214 of 240). The pool is now
+> **fixed per query** (`pool := maxPoolDocs`): one canonical deduplicated
+> owner list, pages partition it by construction; hydration stays
+> bounded at the same 2000-doc worst case — the FTS LIMIT only bounds
+> *matching* rows, so small match sets hydrate proportionally. The
+> regression test `TestSearchEpisodePagesPartitionAcrossMultiDocOwners`
+> reproduces the divergence deterministically: 100 old short-doc owners
+> fill raw BM25 ranks 0..199 while 50 fresh long-title owners rank raw
+> 200..249 yet canonically top-50 (×3 field weight × decay ≈ 1) — it
+> fails on the old sizing (page one serves old owners, fresh owners
+> unreachable) and passes on the fixed pool.
+> `scripts/search-partition-probe.py` walks every page of a live archive
+> asserting disjoint pages and complete episode coverage, attributing
+> shortfalls to the two documented caps (channels & playlists block cap
+> of 8; episode pool cap on >2000-doc match sets) — island: 0 dupes,
+> 240/240 reachable; `the` (38k docs): 0 dupes, 1525 owners reachable
+> within the pool cap. The fixture-based smoke structurally cannot see
+> partition defects (one doc per owner); use the probe for release
+> verification.
 
 ## Summary
 
