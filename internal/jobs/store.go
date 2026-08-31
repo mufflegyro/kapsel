@@ -391,19 +391,19 @@ func (s *Store) Claim(ctx context.Context, now time.Time, staleAfter time.Durati
 	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs
 SET status = ?, progress = 1, error = '', locked_at = NULL, cancel_requested = 0, completed_at = ?, updated_at = ?
-WHERE status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at <= ? AND result_committed = 1`, StatusSucceeded, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
+WHERE status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at COLLATE RFC3339_NANO <= ? AND result_committed = 1`, StatusSucceeded, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
 		return Job{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs
 SET status = ?, result_committed = 0, locked_at = NULL, completed_at = ?, updated_at = ?
-WHERE status = ? AND cancel_requested = 1 AND locked_at IS NOT NULL AND locked_at <= ?`, StatusCancelled, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
+WHERE status = ? AND cancel_requested = 1 AND locked_at IS NOT NULL AND locked_at COLLATE RFC3339_NANO <= ?`, StatusCancelled, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
 		return Job{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs
 SET status = ?, error = ?, locked_at = NULL, completed_at = ?, updated_at = ?
-WHERE status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at <= ? AND result_committed = 0 AND attempts >= max_attempts`, StatusFailed, staleMaxAttemptsError, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
+WHERE status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at COLLATE RFC3339_NANO <= ? AND result_committed = 0 AND attempts >= max_attempts`, StatusFailed, staleMaxAttemptsError, nowText, nowText, StatusRunning, staleBeforeText); err != nil {
 		return Job{}, false, err
 	}
 
@@ -411,9 +411,9 @@ WHERE status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_a
 	err = tx.QueryRowContext(ctx, `
 SELECT id
 FROM jobs
-WHERE (status = ? AND cancel_requested = 0 AND run_after <= ?)
-   OR (status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at <= ? AND attempts < max_attempts)
-ORDER BY priority DESC, run_after, created_at
+WHERE (status = ? AND cancel_requested = 0 AND run_after COLLATE RFC3339_NANO <= ?)
+   OR (status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at COLLATE RFC3339_NANO <= ? AND attempts < max_attempts)
+ORDER BY priority DESC, run_after COLLATE RFC3339_NANO, created_at COLLATE RFC3339_NANO
 LIMIT 1`, StatusQueued, nowText, StatusRunning, staleBeforeText).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, tx.Commit()
@@ -426,8 +426,8 @@ LIMIT 1`, StatusQueued, nowText, StatusRunning, staleBeforeText).Scan(&id)
 UPDATE jobs
 SET status = ?, attempts = attempts + 1, locked_at = ?, cancel_requested = 0, updated_at = ?
 WHERE id = ?
-  AND ((status = ? AND cancel_requested = 0 AND run_after <= ?)
-    OR (status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at <= ? AND attempts < max_attempts))`, StatusRunning, nowText, nowText, id, StatusQueued, nowText, StatusRunning, staleBeforeText)
+  AND ((status = ? AND cancel_requested = 0 AND run_after COLLATE RFC3339_NANO <= ?)
+    OR (status = ? AND cancel_requested = 0 AND locked_at IS NOT NULL AND locked_at COLLATE RFC3339_NANO <= ? AND attempts < max_attempts))`, StatusRunning, nowText, nowText, id, StatusQueued, nowText, StatusRunning, staleBeforeText)
 	if err != nil {
 		return Job{}, false, err
 	}

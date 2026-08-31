@@ -159,6 +159,34 @@ func TestClaimCompleteAndRetry(t *testing.T) {
 	}
 }
 
+func TestClaimOrdersSameSecondFractionalRunAfter(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(openJobsDB(t, filepath.Join(t.TempDir(), "kapsel.db")))
+	// Two queued jobs inside the same second whose RFC3339Nano texts
+	// misorder under BINARY comparison (...00.1Z sorts above
+	// ...00.100000001Z). Claim must pick the numerically earlier one.
+	base := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+	earlyRunAfter := base.Add(100 * time.Millisecond)
+	lateRunAfter := earlyRunAfter.Add(100 * time.Nanosecond)
+	// Enqueue the later job first so insertion order cannot mask the sort.
+	if _, err := store.Enqueue(context.Background(), EnqueueParams{ID: "fraction-late", Type: "download", RunAfter: lateRunAfter}); err != nil {
+		t.Fatal(err)
+	}
+	early, err := store.Enqueue(context.Background(), EnqueueParams{ID: "fraction-early", Type: "download", RunAfter: earlyRunAfter})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, ok, err := store.Claim(context.Background(), base.Add(time.Hour), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.ID != early.ID {
+		t.Fatalf("expected claim to pick the numerically earlier fraction (%s), got ok=%v id=%s", early.ID, ok, claimed.ID)
+	}
+}
+
 func TestFailStopsAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 

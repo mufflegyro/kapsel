@@ -103,7 +103,7 @@ WITH ranked_auto_downloads AS (
 		v.keep_forever AS keep_forever,
 		ROW_NUMBER() OVER (
       PARTITION BY v.channel_id
-      ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') DESC, v.id DESC
+      ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') COLLATE RFC3339_NANO DESC, v.id DESC
     ) AS channel_download_rank
 	  FROM videos v
 	  LEFT JOIN user_progress up ON up.video_id = v.id
@@ -133,7 +133,7 @@ SELECT id, media_path, downloaded_at, media_origin
 FROM (
   SELECT id, media_path, downloaded_at, media_origin
   FROM watched_with_media
-  WHERE watched_at <> '' AND watched_at <= ?
+  WHERE watched_at <> '' AND watched_at COLLATE RFC3339_NANO <= ?
   UNION
   SELECT id, media_path, downloaded_at, media_origin
   FROM ranked_auto_downloads
@@ -142,9 +142,9 @@ FROM (
     AND position_seconds = 0
     AND progress_watched = 0
     AND video_watched = 0
-    AND downloaded_at <= ?
+    AND downloaded_at COLLATE RFC3339_NANO <= ?
 )
-ORDER BY downloaded_at ASC, id ASC
+ORDER BY downloaded_at COLLATE RFC3339_NANO ASC, id ASC
 LIMIT ?`, DownloadOriginChannelAuto, watchedCutoff, staleCutoff, limit)
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ WITH ranked_auto_downloads AS (
     v.keep_forever AS keep_forever,
     ROW_NUMBER() OVER (
       PARTITION BY v.channel_id
-      ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') DESC, v.id DESC
+      ORDER BY COALESCE(NULLIF(v.published_at, ''), NULLIF(v.archived_at, ''), v.updated_at, v.created_at, '') COLLATE RFC3339_NANO DESC, v.id DESC
     ) AS channel_download_rank
   FROM videos v
   LEFT JOIN user_progress up ON up.video_id = v.id
@@ -274,7 +274,7 @@ SELECT EXISTS(
   FROM (
     SELECT id, media_path, downloaded_at, media_origin
     FROM watched_with_media
-    WHERE watched_at <> '' AND watched_at <= ?
+    WHERE watched_at <> '' AND watched_at COLLATE RFC3339_NANO <= ?
     UNION
     SELECT id, media_path, downloaded_at, media_origin
     FROM ranked_auto_downloads
@@ -283,7 +283,7 @@ SELECT EXISTS(
       AND position_seconds = 0
       AND progress_watched = 0
       AND video_watched = 0
-      AND downloaded_at <= ?
+      AND downloaded_at COLLATE RFC3339_NANO <= ?
   )
   WHERE id = ?
     AND media_path = ?

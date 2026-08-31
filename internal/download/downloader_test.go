@@ -3914,6 +3914,41 @@ func TestAutoDownloadRetentionKeepsUnwatchedAndProtectedMediaOfAnyOrigin(t *test
 	}
 }
 
+func TestAutoDownloadRetentionKeepsWatchedMediaNewerThanCutoffByFraction(t *testing.T) {
+	t.Parallel()
+
+	db := openDownloadDB(t)
+	mediaRoot := writeDownloadFiles(t, "videos/fraction-newer.mp4")
+	if _, err := db.Exec("INSERT INTO channels (id, external_id, name, subscribed) VALUES ('chan-1', 'chan-1', 'Archive Workshop', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	// Watched cutoff 100ns before the video's watched_at text. The two
+	// RFC3339Nano texts land in the same second and BINARY order flips the
+	// pair (...00.100000001Z sorts below ...00.1Z), which used to mark
+	// the video eligible for removal 100ns early.
+	watchedAfter := DefaultRetentionWatchedAfter - 100*time.Millisecond
+	cutoffTime := now.Add(-watchedAfter)
+	watchedAt := cutoffTime.Add(100 * time.Nanosecond).Format(time.RFC3339Nano)
+	downloadedAt := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
+	seedRetentionVideo(t, db, "fractionnew", "2026-05-04", "videos/fraction-newer.mp4", DownloadOriginManual, downloadedAt)
+	if _, err := db.Exec("UPDATE videos SET watched = 0 WHERE id = 'fractionnew'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO user_progress (video_id, position_seconds, duration_seconds, watched, updated_at) VALUES ('fractionnew', 30, 120, 1, ?)", watchedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewDownloader(db, Config{MediaRoot: mediaRoot}, nil).ApplyAutoDownloadRetention(context.Background(), RetentionOptions{Now: func() time.Time { return now }, WatchedAfter: watchedAfter, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Checked != 0 || result.Removed != 0 {
+		t.Fatalf("expected video watched 100ns after the cutoff to be retained, got %#v", result)
+	}
+	assertScalar(t, db, "SELECT media_path <> '' FROM videos WHERE id = ?", int64(1), "fractionnew")
+}
+
 func TestAutoDownloadRetentionWatchedCleanupDisabled(t *testing.T) {
 	t.Parallel()
 

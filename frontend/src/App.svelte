@@ -2248,6 +2248,12 @@
       setCatalogVideoJob(itemID, catalogVideoJobState(job));
       if (path === '/downloads') loadJobs({ page: 1, showLoading: false });
       watchCatalogVideoJob(itemID, job.id);
+      // A live jobs snapshot can land while this POST is in flight, before the
+      // catalog entry carries the job id — applyLiveJob then drops the update.
+      // The accepted response is now the staler copy, so re-apply the fresher
+      // stashed state (handleLiveMessage stashes every snapshot).
+      const stashed = (pendingLiveJobsSnapshot?.liveJobs ?? []).find(live => live?.id === job.id);
+      if (stashed) applyLiveJob(stashed);
     } catch (error) {
       setCatalogVideoJob(itemID, { status: 'error', progress: 0, job: null, error: error.message });
     }

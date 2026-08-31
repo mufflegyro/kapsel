@@ -28,6 +28,15 @@ A lexicographic miss delays a job's pickup by at most one runner loop (`idleDela
 - Do not change the test-side `futureClaimTime()` convention; it is the accepted dodge for the test cliff.
 - Do not "fix" one table family only: any change must cover the jobs table and the retention comparison family together or not at all.
 
+## Resolution (2026-08-31)
+
+Went with hardening option 2's **custom collation variant**: `modernc.org/sqlite` v1.50.0 supports `RegisterCollationUtf8` (verified — driver-level, process-lifetime, applies to every connection opened after registration, and `internal/database`'s package init runs before any `sql.Open`), so the fix is comparison-time normalization with zero data rewrites and no API-visible format changes (option 1's two blockers).
+
+- New `internal/database/collation.go`: registers the `RFC3339_NANO` collation at package init. The comparator parses both sides with `time.Parse(time.RFC3339Nano, ...)` (accepts Z, offsets, and any fraction width) and falls back to `strings.Compare` for non-timestamp text, preserving BINARY order for the `''` COALESCE fallbacks.
+- Every comparison site opted in via `COLLATE RFC3339_NANO`: jobs `Claim` (filter, stale-recovery re-check under the tx, and `ORDER BY run_after, created_at`), the three stale-recovery updates, and the retention candidate/recheck queries (`watched_at <= cutoff`, `downloaded_at <= cutoff`, the channel-rank window `ORDER BY COALESCE(...)`, and `ORDER BY downloaded_at`). Expression-level COLLATE loses index use on those terms, but the jobs table is transient/small and the retention queries are already filtered scans.
+- Regression tests: `internal/database/collation_test.go` (comparator pairs + collated filter/sort over mixed fractions), `TestClaimOrdersSameSecondFractionalRunAfter` (claim must pick the numerically earlier fraction; BINARY picks the later one), and `TestAutoDownloadRetentionKeepsWatchedMediaNewerThanCutoffByFraction` (watched 100ns after the cutoff must be retained; BINARY removed it).
+- `futureClaimTime()` stays as-is per the non-goals. Status: **landed 2026-08-31**.
+
 ## References
 
 - `2eca6c3` — test-side fix and `futureClaimTime` doc comment (root-cause write-up)

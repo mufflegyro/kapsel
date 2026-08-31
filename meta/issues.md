@@ -1,6 +1,6 @@
 - [x] [Add hide watched checkbox to the sort toolbar](issues/add-hide-watched-checkbox.md)
-- [ ] [Fix flaky catalog download success refresh e2e test](issues/fix-flaky-catalog-download-success-refresh-e2e-test.md)
-- [ ] [Harden text timestamp comparisons against RFC3339Nano fraction drift](issues/harden-text-timestamp-comparisons-against-fraction-drift.md)
+- [x] [Fix flaky catalog download success refresh e2e test](issues/fix-flaky-catalog-download-success-refresh-e2e-test.md)
+- [x] [Harden text timestamp comparisons against RFC3339Nano fraction drift](issues/harden-text-timestamp-comparisons-against-fraction-drift.md)
 - [x] [Upload a playlist CSV from the playlist page](issues/upload-playlist-csv-via-ui.md)
 - [x] [Import a YouTube playlist by link from the playlist page](issues/import-playlist-by-url.md)
 - [ ] [Sandbox external media tools](issues/sandbox-external-media-tools.md)
