@@ -3,11 +3,13 @@ package denorm
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 )
 
 type Runner interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 func SyncSearchDocument(ctx context.Context, db Runner, ownerType string, ownerID string, field string, text string) error {
@@ -53,6 +55,21 @@ VALUES ('video', ?, 'channel', ? || ' ' || ?)
 ON CONFLICT(owner_type, owner_id, field) DO UPDATE SET text = excluded.text`, videoID, channelName, videoTitle)
 
 	return err
+}
+
+// ChannelName returns the stored name of a channel row, or "" when the
+// channel does not exist yet. Callers combine it with a name comparison to
+// detect renames before refreshing a channel's per-video search docs.
+func ChannelName(ctx context.Context, db Runner, channelID string) (string, error) {
+	var name string
+	err := db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id = ?", channelID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // SyncChannelVideoSearchDocuments writes (or refreshes) the per-video channel

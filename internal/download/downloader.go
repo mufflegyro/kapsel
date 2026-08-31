@@ -3432,7 +3432,11 @@ func (d *Downloader) assetPath(raw string) (string, error) {
 }
 
 func (d *Downloader) upsertChannel(ctx context.Context, exec sqlExecutor, id string, name string, description string, thumbnailURL string) error {
-	_, err := exec.ExecContext(ctx, `
+	previousName, err := denorm.ChannelName(ctx, exec, id)
+	if err != nil {
+		return err
+	}
+	_, err = exec.ExecContext(ctx, `
 INSERT INTO channels (id, external_id, name, description, thumbnail_url, updated_at)
 VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(id) DO UPDATE SET
@@ -3453,9 +3457,12 @@ ON CONFLICT(id) DO UPDATE SET
 	}
 
 	// Refresh the per-video channel search docs so a channel rename is
-	// reflected everywhere; the sync skips videos whose doc text already
-	// matches, keeping per-video import loops cheap.
-	return denorm.SyncChannelVideoSearchDocuments(ctx, exec, id, name)
+	// reflected everywhere — but only when the name actually changed; see the
+	// importer's upsertChannel for the O(videos)-per-video rationale.
+	if previousName != name {
+		return denorm.SyncChannelVideoSearchDocuments(ctx, exec, id, name)
+	}
+	return nil
 }
 
 func (d *Downloader) markChannelScanned(ctx context.Context, exec sqlExecutor, id string) error {

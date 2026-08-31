@@ -3,9 +3,12 @@ package search
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"kapsel/internal/database"
 )
@@ -356,4 +359,167 @@ INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video'
 			t.Fatalf("expected members-only video to be excluded from search, got %#v", result)
 		}
 	}
+}
+
+func seedDatedVideo(t *testing.T, db *sql.DB, id string, field string, text string, publishedAt time.Time) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		"INSERT INTO videos (id, external_id, title, published_at) VALUES (?, ?, ?, ?)",
+		id, id, text, publishedAt.UTC().Format(time.RFC3339),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', ?, ?, ?)",
+		id, field, text,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedCommentDoc(t *testing.T, db *sql.DB, commentID string, videoID string, publishedAt time.Time) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		"INSERT INTO videos (id, external_id, title, published_at) VALUES (?, ?, ?, ?)",
+		videoID, videoID, "Commented video", publishedAt.UTC().Format(time.RFC3339),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO comments (id, video_id, text) VALUES (?, ?, 'Island')", commentID, videoID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('comment', ?, 'text', 'Island')", commentID,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Identical title docs differing only in publish date: the re-rank must
+// order the fresh upload first, where raw BM25 cannot separate them.
+func TestSearchReranksFreshVideosAboveOldTitles(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	seedDatedVideo(t, db, "vid-fresh", "title", "Island", now.Add(-48*time.Hour))
+	seedDatedVideo(t, db, "vid-old", "title", "Island", now.Add(-8*365*24*time.Hour))
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].OwnerID != "vid-fresh" || results[1].OwnerID != "vid-old" {
+		t.Fatalf("expected fresh video ranked above old video, got %#v", results)
+	}
+}
+
+// Same doc text and age in different fields: the title weight must lift the
+// title row above the comment row where BM25 alone cannot separate them.
+func TestSearchWeightsTitleMatchesAboveTextMatches(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	seedDatedVideo(t, db, "vid-title", "title", "Island", time.Now().Add(-24*time.Hour))
+	seedCommentDoc(t, db, "comment-1", "vid-comment", time.Now().Add(-24*time.Hour))
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].OwnerID != "vid-title" || results[0].Field != "title" {
+		t.Fatalf("expected title match ranked above comment match, got %#v", results)
+	}
+}
+
+// The proposal's editorial constraint: a strong title match from years ago
+// must still beat a weak transcript/comment match from today.
+func TestSearchOldTitleStillBeatsFreshComment(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	seedDatedVideo(t, db, "vid-oldtitle", "title", "Island", now.Add(-7*365*24*time.Hour))
+	seedCommentDoc(t, db, "comment-1", "vid-comment", now.Add(-24*time.Hour))
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].OwnerID != "vid-oldtitle" {
+		t.Fatalf("expected 7-year-old title match ranked above fresh comment match, got %#v", results)
+	}
+}
+
+// The candidate pool must extend past the returned page: a fresh long-title
+// video sitting below 60 old short-title docs in raw BM25 order must still
+// surface on the first page after re-ranking.
+func TestSearchPoolSurfacesFreshVideoBeyondBM25Cutoff(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	old := now.Add(-8 * 365 * 24 * time.Hour)
+	for i := range 60 {
+		seedDatedVideo(t, db, "vid-old-"+fmt.Sprintf("%02d", i), "title", "Island", old)
+	}
+	seedDatedVideo(t, db, "vid-fresh", "title", "A long walkthrough diary about an island adventure trip", now.Add(-24*time.Hour))
+
+	results, err := Search(context.Background(), db, Query{Term: "island", Limit: MaxLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != MaxLimit {
+		t.Fatalf("expected a full page of %d results, got %d", MaxLimit, len(results))
+	}
+	for index, result := range results {
+		if result.OwnerID == "vid-fresh" {
+			if index >= MaxLimit {
+				t.Fatalf("expected fresh video within the first page, got index %d", index)
+			}
+			return
+		}
+	}
+	t.Fatal("expected fresh video to appear within the first page")
+}
+
+// Offsets page through the re-ranked list; doc lengths grow strictly, so
+// raw BM25 order is deterministic and the windows are exact.
+func TestSearchOffsetWindow(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	for i := range 10 {
+		text := "Island" + strings.Repeat(" pad", i)
+		if _, err := db.Exec(
+			"INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES ('video', ?, 'title', ?)",
+			"vid-"+strconv.Itoa(i), text,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertWindow := func(offset int, want []string) {
+		t.Helper()
+		results, err := Search(context.Background(), db, Query{Term: "island", Limit: 3, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != len(want) {
+			t.Fatalf("offset %d: expected %d results, got %#v", offset, len(want), results)
+		}
+		for index, id := range want {
+			if results[index].OwnerID != id {
+				t.Fatalf("offset %d: expected %s at position %d, got %#v", offset, id, index, results[index])
+			}
+		}
+	}
+
+	assertWindow(0, []string{"vid-0", "vid-1", "vid-2"})
+	assertWindow(4, []string{"vid-4", "vid-5", "vid-6"})
+	assertWindow(50, []string{})
 }

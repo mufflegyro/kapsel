@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"html"
+	"math"
+	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -14,9 +17,78 @@ const (
 	markEnd      = "\x1e"
 )
 
+// candidatePool is how many BM25-ranked documents feed the Go-side
+// re-ranker. Re-ranking must see more than one page of BM25 order to
+// surface rows that recency and field weights would lift into the page
+// from deeper in the raw relevance order; 200 keeps the hydration and
+// scoring cost bounded on large archives.
+const candidatePool = 200
+
+// recencyHalfLife is the age at which a video document's relevance
+// contribution halves. Three years balances the two constraints from the
+// re-rank proposal: a strong title match from ~2019 must still beat a
+// weak caption match from last week, while a fresh title match must
+// decisively outrank decade-old short titles (whose BM25 length
+// normalization otherwise dominates a frequent term's result page).
+const recencyHalfLife = 3 * 365.25 * 24 * time.Hour
+
+// fieldWeight multiplies BM25 relevance by the matched field: titles
+// (and channel names) lead, the per-video channel doc — channel name plus
+// video title — sits between title and description, transcripts and
+// comments trail. Unknown fields rank as plain descriptions.
+func fieldWeight(field string) float64 {
+	switch {
+	case field == "title" || field == "name":
+		return 3.0
+	case field == "channel":
+		return 2.0
+	case field == "description":
+		return 1.0
+	case strings.HasPrefix(field, "text"):
+		return 0.5
+	default:
+		return 1.0
+	}
+}
+
+// recencyDecay scales a video document's relevance by its age: an
+// exponential 0.5^(age/half-life) multiplier. Undated and future-dated
+// rows get no adjustment. Channel and playlist documents carry no publish
+// date and are likewise neutral — the secondary channels and playlists
+// block keeps its BM25 relevance order.
+func recencyDecay(publishedAt string, now time.Time) float64 {
+	published, ok := parsePublishedAt(publishedAt)
+	if !ok {
+		return 1.0
+	}
+	age := now.Sub(published)
+	if age <= 0 {
+		return 1.0
+	}
+	return math.Pow(0.5, age.Hours()/recencyHalfLife.Hours())
+}
+
+// parsePublishedAt tolerates the timestamp shapes the archive actually
+// stores: RFC3339 (with or without fractional seconds, from the importer
+// and download paths) and bare dates.
+func parsePublishedAt(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 type Query struct {
-	Term  string
-	Limit int
+	Term   string
+	Limit  int
+	Offset int
 }
 
 // MatchStats carries match-set counts for a search term.
@@ -65,7 +137,19 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 	if limit > MaxLimit {
 		limit = MaxLimit
 	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
 
+	pool := candidatePool
+	if pool < limit+offset {
+		pool = limit + offset
+	}
+
+	// Fetch a BM25-ranked candidate pool larger than the returned page:
+	// the re-rank below reorders by relevance × field weight × recency,
+	// which can lift documents from far down the raw BM25 order.
 	rows, err := db.QueryContext(ctx, `
 SELECT
   owner_type,
@@ -76,7 +160,7 @@ SELECT
 FROM search_documents_fts
 WHERE search_documents_fts MATCH ?
 ORDER BY rank
-LIMIT ?`, matchExpression(term), limit)
+LIMIT ?`, matchExpression(term), pool)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +190,39 @@ LIMIT ?`, matchExpression(term), limit)
 		return nil, err
 	}
 
-	return results, nil
+	results = rerankResults(results)
+	return paginateResults(results, offset, limit), nil
+}
+
+// rerankResults orders hydrated rows by re-rank score, descending: BM25
+// relevance (negative in FTS5, lower is better) times the matched field's
+// weight times the owning video's recency decay. Rows that resolve to the
+// same video (title, description, subtitle, comment, and channel docs) are
+// scored independently — the display layer dedupes. Ties keep the incoming
+// BM25 order, so the sort is deterministic.
+func rerankResults(results []Result) []Result {
+	now := time.Now()
+	sort.SliceStable(results, func(i int, j int) bool {
+		return rerankScore(results[i], now) > rerankScore(results[j], now)
+	})
+	return results
+}
+
+func rerankScore(result Result, now time.Time) float64 {
+	return -result.Rank * fieldWeight(result.Field) * recencyDecay(result.Record.PublishedAt, now)
+}
+
+// paginateResults applies the offset window to the re-ranked list. The
+// full ranked list is at most candidatePool long, so slicing is safe.
+func paginateResults(results []Result, offset int, limit int) []Result {
+	if offset >= len(results) {
+		return []Result{}
+	}
+	results = results[offset:]
+	if limit < len(results) {
+		results = results[:limit]
+	}
+	return results
 }
 
 func hydrateResults(ctx context.Context, db *sql.DB, results []Result) ([]Result, error) {

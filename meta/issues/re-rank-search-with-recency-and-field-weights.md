@@ -1,5 +1,21 @@
 # Re-rank search results with recency and field weights
 
+> **Landed 2026-08-31.** Final decisions: multiplicative exponential recency
+> decay with a **3-year half-life** (`recencyHalfLife`), not the 18 months
+> floated in discussion — the constraint below (strong ~2019 title beats a
+> weak caption from last week) fails at 18 months (2019 titles decay to
+> ×0.03 and lose to fresh captions; crossover sits near ~7.8 years, so the
+> half-life must exceed it). Field weights: `title`/channel `name` ×3,
+> per-video `channel` doc ×2, `description` ×1, transcript/comment `text*`
+> ×0.5, unknown ×1 — multiplicative on BM25, so the ordering is invariant
+> to corpus-scale shifts in absolute bm25 values. Candidate pool: 200 docs
+> fetched by raw BM25, hydrated, re-scored in Go, then offset/limit applied.
+> Undated and future-dated rows and channel/playlist docs get neutral decay
+> (×1), keeping the secondary block in BM25 relevance order per (d). The
+> endpoint gained an `offset` parameter (clamped ≤10000, echoed in the
+> response) so pages past 50 are reachable; UI lazy-loading is tracked in
+> `add-search-result-pagination-and-lazy-loading.md`.
+
 ## Summary
 
 Search retrieval and matching are fixed (multiword AND semantics, honest counts), but ranking is still pure BM25 over a single FTS `text` column, which produces two systematic distortions on real archives:
@@ -35,5 +51,17 @@ This issue is deliberately scoped as a product decision: the weights decide how 
 
 ## Notes
 
-- Open decisions to confirm before implementation: (a) decay shape and half-life, (b) whether captions should ever outrank titles, (c) internal pool size vs. query cost on large archives, (d) whether the secondary channels/playlists block should also be re-ranked (recommendation: no — keep relevance order).
+- Open decisions — resolved 2026-08-31 at implementation: (a) decay shape is
+  a multiplicative exponential with a 3-year half-life (bounded, no cliff —
+  a 2019 title still beats a fresh caption; crossover ≈ 7.8 years);
+  (b) captions beat titles only for titles older than ≈ 8 years at equal
+  BM25 — the weight gap (×3 vs ×0.5) needs ~4 half-lives to overcome;
+  (c) internal pool is 200 (hydrating + scoring 200 rows is cheap; covers
+  any realistic first page including offsets); (d) secondary channels/
+  playlists block keeps BM25 relevance order (their docs are undated, so
+  decay is neutral — as recommended).
+- Behavior pins in `internal/search`: fresh-above-old for identical docs,
+  title-above-comment at equal text and age, old-title-above-fresh-comment
+  at 7 years, pool surfacing a fresh video that raw BM25 ranks 61st behind
+  60 old short titles, and exact offset windows.
 - Estimated effort: moderate — Go-side changes in `Search()` plus tests; no frontend or schema work.

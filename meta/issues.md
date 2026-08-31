@@ -26,7 +26,7 @@
 - [ ] [Manage sidebar Explore links: create from searches, remove existing ones](issues/add-explore-links-from-search.md)
 - [x] [Make search results display as an episode thumbnail list instead of a channel list](issues/make-search-results-episode-first.md)
 - [ ] [Add search result pagination with lazy loading](issues/add-search-result-pagination-and-lazy-loading.md)
-- [ ] [Re-rank search results with recency and field weights](issues/re-rank-search-with-recency-and-field-weights.md)
+- [x] [Re-rank search results with recency and field weights](issues/re-rank-search-with-recency-and-field-weights.md)
 - [x] [Mark members-only videos and disable their download](issues/mark-members-only-videos.md)
 - [x] [Hide members-only videos from all views](issues/hide-members-only-videos.md)
 - [x] [Import playlists from CSV exports](issues/import-playlists-from-csv.md)

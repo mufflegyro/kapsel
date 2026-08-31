@@ -4027,6 +4027,48 @@ func TestSearchEndpointMatchesMultiwordQueries(t *testing.T) {
 	}
 }
 
+func TestSearchEndpointReturnsOffsetPages(t *testing.T) {
+	t.Parallel()
+
+	db := openServerTestDB(t)
+	// Distinct lengths make raw BM25 order deterministic: vid-1 first.
+	if _, err := db.Exec(`
+INSERT INTO search_documents (owner_type, owner_id, field, text) VALUES
+  ('video', 'vid-1', 'title', 'Kapsel'),
+  ('video', 'vid-2', 'title', 'Kapsel two'),
+  ('video', 'vid-3', 'title', 'Kapsel two three')`); err != nil {
+		t.Fatal(err)
+	}
+
+	requestPage := func(offset string) searchResponse {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=Kapsel&limit=1&offset="+offset, nil)
+		rec := httptest.NewRecorder()
+		NewHandler(WithDatabase(db)).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		var response searchResponse
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	page := requestPage("0")
+	if page.Offset != 0 || len(page.Data) != 1 || page.Data[0].OwnerID != "vid-1" {
+		t.Fatalf("expected first page to hold vid-1, got %#v", page)
+	}
+	page = requestPage("1")
+	if page.Offset != 1 || len(page.Data) != 1 || page.Data[0].OwnerID != "vid-2" {
+		t.Fatalf("expected offset 1 to hold vid-2, got %#v", page)
+	}
+	page = requestPage("99")
+	if page.Offset != 99 || len(page.Data) != 0 || page.Total != 3 {
+		t.Fatalf("expected offset beyond the match set to return an empty page with honest counts, got %#v", page)
+	}
+}
+
 func TestSearchEndpointSignsHydratedThumbnail(t *testing.T) {
 	t.Parallel()
 

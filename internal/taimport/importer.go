@@ -1019,8 +1019,12 @@ func upsertChannel(ctx context.Context, db sqlRunner, id string, name string, de
 	if name == "" {
 		name = id
 	}
+	previousName, err := denorm.ChannelName(ctx, db, id)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 INSERT INTO channels (id, external_id, name, description, thumbnail_url, subscribed, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
@@ -1038,9 +1042,14 @@ ON CONFLICT(id) DO UPDATE SET
 	}
 
 	// Refresh the per-video channel search docs so a channel rename is
-	// reflected everywhere; the sync skips videos whose doc text already
-	// matches, keeping per-video import loops cheap.
-	return denorm.SyncChannelVideoSearchDocuments(ctx, db, id, name)
+	// reflected everywhere — but only when the name actually changed. A
+	// per-video import loop upserts the channel once per video with an
+	// unchanged name, and rescanning the whole catalog each time is O(videos)
+	// per video (O(N²) per import).
+	if previousName != name {
+		return denorm.SyncChannelVideoSearchDocuments(ctx, db, id, name)
+	}
+	return nil
 }
 
 func upsertMediaAsset(ctx context.Context, db sqlRunner, ownerType string, ownerID string, kind string, path string) error {

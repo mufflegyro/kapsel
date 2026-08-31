@@ -1596,6 +1596,7 @@ type pagination struct {
 type searchResponse struct {
 	Data           []search.Result `json:"data"`
 	Limit          int             `json:"limit"`
+	Offset         int             `json:"offset"`
 	Total          int             `json:"total"`
 	DistinctOwners int             `json:"distinct_owners"`
 }
@@ -1616,7 +1617,8 @@ func searchDocuments(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 			return
 		}
 		limit := searchLimit(r.URL.Query().Get("limit"))
-		results, err := search.Search(r.Context(), db, search.Query{Term: term, Limit: limit})
+		offset := searchOffset(r.URL.Query().Get("offset"))
+		results, err := search.Search(r.Context(), db, search.Query{Term: term, Limit: limit, Offset: offset})
 		if err != nil {
 			writeJSONError(w, "failed to search", http.StatusInternalServerError)
 			return
@@ -1633,7 +1635,7 @@ func searchDocuments(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(searchResponse{Data: results, Limit: limit, Total: stats.Total, DistinctOwners: stats.DistinctOwners})
+		_ = json.NewEncoder(w).Encode(searchResponse{Data: results, Limit: limit, Offset: offset, Total: stats.Total, DistinctOwners: stats.DistinctOwners})
 	}
 }
 
@@ -1657,6 +1659,26 @@ func searchLimit(raw string) int {
 	}
 
 	return limit
+}
+
+// maxSearchOffset bounds the re-ranked page window; the ranked list is at
+// most the candidate pool long, so larger offsets simply return empty
+// pages. The bound keeps abusive clients from scanning pointless windows.
+const maxSearchOffset = 10000
+
+func searchOffset(raw string) int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0
+	}
+	offset, err := strconv.Atoi(value)
+	if err != nil || offset <= 0 {
+		return 0
+	}
+	if offset > maxSearchOffset {
+		return maxSearchOffset
+	}
+	return offset
 }
 
 func listVideos(db *sql.DB, mediaURLs mediaURLBuilder) http.HandlerFunc {
