@@ -1,0 +1,36 @@
+# Re-rank search results with recency and field weights
+
+## Summary
+
+Search retrieval and matching are fixed (multiword AND semantics, honest counts), but ranking is still pure BM25 over a single FTS `text` column, which produces two systematic distortions on real archives:
+
+1. **No recency signal.** Ranking is `ORDER BY bm25(...) LIMIT 50`. Old videos with short titles dominate: on a live archive, a search for "island" returned 50/50 title matches dominated by 2016–2019 uploads; a 2026-08-27 video whose title contains the query ranked below the cutoff entirely.
+2. **Field unfairness via length normalization.** Title, description, caption transcripts, and comments all live in one indexed column. BM25 length-normalizes, so a caption with one query occurrence in ~60k tokens scores far below a 3-word title (replica measurements: old short titles −3.2…−2.7, recent 10-token titles −2.6, descriptions −1.8, captions −1.6…−1.8). Caption matches effectively never reach the top 50.
+
+This issue is deliberately scoped as a product decision: the weights decide how strongly recency should beat textual relevance, and whether a caption match should ever outrank an old title match. Those are editorial calls, not bug fixes.
+
+## Requirements
+
+- **Enlarge the candidate pool, re-rank after hydration.** The FTS `LIMIT` happens before hydration, so page-level reordering alone cannot fix this. Fetch a larger internal pool (e.g. top 200–400 by BM25), hydrate, then re-rank in Go and return the configured page.
+- **Re-rank score:** `rank = bm25 + recency_decay(age) + field_boost(title > description > caption/comment)`. Weights as named constants in `internal/search`; unit tests pin the ordering behavior, not magic numbers.
+- **Recency decay** should be gentle (e.g. a bounded bonus/penalty over years, not a cliff) so a strong title match from 2019 still beats a weak caption match from last week — exact balance is the product decision to confirm in review.
+- **Field boost** uses the already-known `field` of each matched doc; no new indexing is required.
+- **Keep counts honest:** the new `Stats` counting must reflect the same match set (it already counts all rows, independent of the page, so it is unaffected).
+- Keep the episode-first display, dedupe, and newest-first client ordering as-is; they operate on whatever order the server returns (the client sorts episodes by `published_at`, so the visible change from re-ranking is *which* episodes make the page, and how the secondary block orders).
+
+## Acceptance Criteria
+
+- On an archive where "island" previously returned all-2016 pages, the first page includes recent videos containing the term in title or caption (e.g. Adam Stew's 2026 "…Remote Island" upload).
+- A caption-only match for a recent video can appear within the first page for a term that also matches many old titles (the exact threshold is part of the weight decision).
+- `go test ./internal/search/...` pins the re-ranking order with deterministic fixtures; existing tests stay green.
+- No FTS schema migration: `owner_type`/`field` already exist (unindexed columns usable as predicates), and re-ranking happens in Go after hydration.
+
+## Related
+
+- `make-search-results-episode-first.md` — display layer this ranks into; landed 2026-08-31.
+- Multiword AND matching and `Stats` counting landed alongside this proposal's filing; they are prerequisites (without A, multiword queries return nothing to rank).
+
+## Notes
+
+- Open decisions to confirm before implementation: (a) decay shape and half-life, (b) whether captions should ever outrank titles, (c) internal pool size vs. query cost on large archives, (d) whether the secondary channels/playlists block should also be re-ranked (recommendation: no — keep relevance order).
+- Estimated effort: moderate — Go-side changes in `Search()` plus tests; no frontend or schema work.
