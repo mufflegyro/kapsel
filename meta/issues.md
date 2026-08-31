@@ -25,6 +25,7 @@
 - [ ] [Make Explore views show episodes instead of a channel list](issues/explore-views-show-episodes.md)
 - [ ] [Manage sidebar Explore links: create from searches, remove existing ones](issues/add-explore-links-from-search.md)
 - [x] [Make search results display as an episode thumbnail list instead of a channel list](issues/make-search-results-episode-first.md)
+- [ ] [Restore channel and playlist matches to search results (secondary block cut by the episode window)](issues/restore-secondary-search-matches.md)
 - [ ] [Add search result pagination with lazy loading](issues/add-search-result-pagination-and-lazy-loading.md)
 - [x] [Re-rank search results with recency and field weights](issues/re-rank-search-with-recency-and-field-weights.md)
 - [x] [Mark members-only videos and disable their download](issues/mark-members-only-videos.md)
