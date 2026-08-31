@@ -18,14 +18,21 @@ const (
 )
 
 // secondaryResultCap bounds the channel and playlist rows appended to every
-// search page regardless of the episode window. Non-video docs carry no
-// recency signal and lower field weights, so without a protected quota they
-// systematically lose the 50-row episode window and the channels & playlists
-// block renders empty for most queries. The quota is window-independent:
-// deterministic per query, never duplicated across offset pages.
+// search page. Channels and playlists are a non-temporal resource: they carry
+// no publish date, so freshness ranking never applies to them, and their
+// matches must never compete with videos for pool or window slots. The block
+// caps at this many rows in pure relevance order; the cap is
+// window-independent — deterministic per query, never duplicated across
+// offset pages.
 const secondaryResultCap = 8
 
-// candidatePool is how many BM25-ranked documents feed the Go-side
+// secondaryPool is how many channel and playlist documents feed the
+// channels & playlists block. Because the block is queried independently of
+// the episode pool, a matching channel is never starved by the volume of
+// matching videos; the bound only guards pathological archives.
+const secondaryPool = 1000
+
+// candidatePool is how many BM25-ranked video documents feed the Go-side
 // re-ranker. Re-ranking must see more than one page of BM25 order to
 // surface rows that recency and field weights would lift into the page
 // from deeper in the raw relevance order; 200 keeps the hydration and
@@ -132,6 +139,20 @@ type ChannelInfo struct {
 	Name string `json:"name"`
 }
 
+// Search matches a term across two independent axes and windows Episodes:
+//
+//   - Episodes (videos, subtitles, comments) are temporal: a BM25 pool of
+//     candidatePool documents feeds the re-ranker (relevance × field weight ×
+//     recency decay) and the offset/limit page is sliced from the result.
+//     The pool grows with the offset so deep pages stay reachable.
+//   - The channels & playlists block is non-temporal: matching channel and
+//     playlist documents are fetched from their own pool (secondaryPool),
+//     ordered by pure relevance — no recency, never competing with videos
+//     for pool or window slots — and capped at secondaryResultCap.
+//
+// The two lists are concatenated in the response; the display layer renders
+// non-video rows as the separate channels & playlists block above the
+// episode grid.
 func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 	term := strings.TrimSpace(query.Term)
 	if term == "" {
@@ -154,10 +175,34 @@ func Search(ctx context.Context, db *sql.DB, query Query) ([]Result, error) {
 	if pool < limit+offset {
 		pool = limit + offset
 	}
+	match := matchExpression(term)
 
-	// Fetch a BM25-ranked candidate pool larger than the returned page:
-	// the re-rank below reorders by relevance × field weight × recency,
-	// which can lift documents from far down the raw BM25 order.
+	episodes, err := searchPool(ctx, db, match, pool, `owner_type IN ('video', 'subtitle', 'comment')`)
+	if err != nil {
+		return nil, err
+	}
+	episodes = rerankResults(episodes)
+	episodes = paginateResults(episodes, offset, limit)
+
+	secondary, err := searchPool(ctx, db, match, secondaryPool, `owner_type IN ('channel', 'playlist')`)
+	if err != nil {
+		return nil, err
+	}
+	secondary = rerankResults(secondary)
+	if len(secondary) > secondaryResultCap {
+		secondary = secondary[:secondaryResultCap]
+	}
+
+	return append(episodes, secondary...), nil
+}
+
+// searchPool fetches up to limit BM25-ranked search documents restricted to
+// the given owner types and hydrates them to display records. Episodes and
+// the channels & playlists block use separate pools (see Search) so
+// non-temporal matches never compete with freshness-weighted videos. The
+// ownerTypes predicate is a constant from the two call sites, never user
+// input.
+func searchPool(ctx context.Context, db *sql.DB, match string, limit int, ownerTypes string) ([]Result, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT
   owner_type,
@@ -166,9 +211,9 @@ SELECT
   snippet(search_documents_fts, 3, char(31), char(30), '...', 12) AS snippet,
   bm25(search_documents_fts) AS rank
 FROM search_documents_fts
-WHERE search_documents_fts MATCH ?
+WHERE search_documents_fts MATCH ? AND `+ownerTypes+`
 ORDER BY rank
-LIMIT ?`, matchExpression(term), pool)
+LIMIT ?`, match, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -193,35 +238,7 @@ LIMIT ?`, matchExpression(term), pool)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	results, err = hydrateResults(ctx, db, results)
-	if err != nil {
-		return nil, err
-	}
-
-	results = rerankResults(results)
-	episodes, secondary := splitEpisodeAndSecondary(results)
-	return append(paginateResults(episodes, offset, limit), secondary...), nil
-}
-
-// splitEpisodeAndSecondary separates the re-ranked pool into episode rows
-// (anything resolving to a video — video, subtitle, and comment docs) and
-// secondary rows (channels and playlists). Episodes feed the offset/limit
-// window; the secondary rows keep their re-rank score order — channel name
-// docs (×3) lead description matches (×1) — and are capped so the block
-// stays small. Taking the cap in score order means a page never shows more
-// than secondaryResultCap non-video rows even when hundreds match.
-func splitEpisodeAndSecondary(results []Result) (episodes []Result, secondary []Result) {
-	episodes = make([]Result, 0, len(results))
-	for _, result := range results {
-		if result.Record.Type != "video" {
-			if len(secondary) < secondaryResultCap {
-				secondary = append(secondary, result)
-			}
-			continue
-		}
-		episodes = append(episodes, result)
-	}
-	return episodes, secondary
+	return hydrateResults(ctx, db, results)
 }
 
 // rerankResults orders hydrated rows by re-rank score, descending: BM25

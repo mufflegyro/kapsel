@@ -669,3 +669,51 @@ func TestSearchEpisodeWindowUnchangedBySecondaryMatches(t *testing.T) {
 		}
 	}
 }
+
+// Channels and playlists are a non-temporal resource: their matches must not
+// depend on how many videos match the term. A channel description doc whose
+// raw BM25 rank falls far outside the episode pool (hundreds of matching
+// episodes, query hitting long description text) must still surface on the
+// first page — this pins the live "Gaming" regression where 14 matching
+// channel docs sat at raw rank 1250+ inside a 200-doc episode pool and the
+// channels & playlists block rendered empty.
+func TestSearchSecondaryIndependentOfEpisodeVolume(t *testing.T) {
+	t.Parallel()
+
+	db := openSearchTestDB(t)
+	now := time.Now()
+	for i := range 300 {
+		seedDatedVideo(t, db, "vid-gaming-"+fmt.Sprintf("%03d", i), "title", "Gaming volume "+strconv.Itoa(i), now.Add(-48*time.Hour))
+	}
+	seedChannelDoc(t, db, "chan-gaming", "description", "An independent gaming review channel")
+
+	results, err := Search(context.Background(), db, Query{Term: "gaming", Limit: MaxLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != MaxLimit+1 {
+		t.Fatalf("expected a full episode window plus the channel row despite 300 matching videos, got %d rows", len(results))
+	}
+	for _, result := range results[:MaxLimit] {
+		if result.Record.Type != "video" {
+			t.Fatalf("expected the window to hold only episodes, got %#v", result)
+		}
+	}
+	secondary := results[MaxLimit]
+	if secondary.OwnerType != "channel" || secondary.OwnerID != "chan-gaming" {
+		t.Fatalf("expected the channel description row appended after the window, got %#v", secondary)
+	}
+
+	// The block is offset-independent: page 2 must carry the same channel row.
+	pageTwo, err := Search(context.Background(), db, Query{Term: "gaming", Limit: MaxLimit, Offset: MaxLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pageTwo) != MaxLimit+1 {
+		t.Fatalf("expected page 2 to carry 50 more episodes plus the same channel row, got %d rows", len(pageTwo))
+	}
+	pageTwoSecondary := pageTwo[len(pageTwo)-1]
+	if pageTwoSecondary.OwnerID != "chan-gaming" {
+		t.Fatalf("expected the same channel row on the offset page, got %#v", pageTwoSecondary)
+	}
+}

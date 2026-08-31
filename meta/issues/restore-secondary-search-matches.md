@@ -1,21 +1,21 @@
 # Restore channel and playlist matches to search results
 
-> **Landed 2026-08-31.** `Search` now splits the re-ranked pool before
-> slicing: episode rows (anything resolving to a video) feed the
-> offset/limit window exactly as before, while non-video rows (channels,
-> playlists) are appended after the window in re-rank score order, capped
-> at `secondaryResultCap = 8` (`internal/search/search.go`). The cap is
-> window-independent — deterministic per query, identical on every offset
-> page, never consuming episode slots. Verified on a real archive: `music`
-> (1012 matches) returns 50 episodes + the `sub art` / `Darko Audio` /
-> `Xander Ewald` channel cards; `playlist` shows its channel card again.
-> Known residual (tracked in `add-search-result-pagination-and-lazy-loading.md`,
-> not this issue): channel docs whose raw BM25 rank falls outside the
-> 200-doc pool are unavailable to the block — on the verification archive
-> only 3 of the matching channel descriptions sat inside the pool. Smoke
-> coverage: the fixture gained 55 filler episodes + a channel-description
-> match, and the smoke asserts a 50-tile window with a non-empty secondary
-> block for `filler` (56 results).
+> **Landed 2026-08-31 (v2).** Channels and playlists are a non-temporal
+> resource: they carry no publish date, so they are now queried entirely
+> outside the temporal ranking — `Search` runs two independent pools
+> (`internal/search/search.go`): episodes (videos/subtitles/comments) feed a
+> recency + field-weight re-ranked window as before, while matching
+> channel/playlist docs come from their **own** pool (`secondaryPool` = 1000),
+> ordered by pure relevance and capped at `secondaryResultCap = 8`,
+> window-independent. A channel match is therefore never starved by the
+> volume of matching videos. Live verification: `music` (1066 matches)
+> returns 50 episodes + the `sub art` / `Darko Audio` / `Xander Ewald`
+> cards; `Gaming` (1372 matches, 14 channel-description docs at raw BM25
+> rank 1250+) returns its channels again — the v1 split could not, because
+> the docs sat outside the 200-doc episode pool. Smoke coverage: the
+> fixture gained 55 filler episodes + a channel-description match, and the
+> smoke asserts a 50-tile window with a non-empty secondary block for
+> `filler` (56 results).
 
 ## Summary
 
