@@ -22,3 +22,4 @@ Protect the web UI, API routes, and signed media URL generation with a simple lo
 ## Notes
 
 - Keep this single-node and local-first; do not add OAuth or a separate auth service.
+- **Directional note:** Yummle is an offline, per-person archive. The identity model should evolve into a **social graph between independent Yummle archives**, not into a big centralized archive with many accounts — each archive is its own node, run by its own user, and separate archives can follow or interact with each other based on trust (see `add-user-management-and-login-system.md` and `add-video-sharing-to-followed-or-favoured-users.md`). In theory anyone can run their own Yummle server and share content or picks with any other server. So while this issue stays single-user/local, the identity it establishes should be stable and portable (stable user/instance id, no reliance on env-config credentials as the only identity) so it can later address peers across servers.

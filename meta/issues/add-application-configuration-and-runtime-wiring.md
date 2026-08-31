@@ -22,3 +22,7 @@ Wire the existing packages into the runnable `kapsel` binary through explicit ap
 ## Notes
 
 - Prefer small `internal/config` and `internal/app` packages over adding logic directly to `main`.
+
+## Related
+
+- `add-settings-page-for-auth-and-archive-maintenance.md` — builds on this foundation by adding stored, UI-editable settings layered over the env-var config defined here.
