@@ -24,7 +24,7 @@
 - [ ] [Add YouTube metadata search with add-to-archive actions](issues/add-youtube-metadata-search.md)
 - [ ] [Make Explore views show episodes instead of a channel list](issues/explore-views-show-episodes.md)
 - [ ] [Manage sidebar Explore links: create from searches, remove existing ones](issues/add-explore-links-from-search.md) *(superseded by Explore menu link editor)*
-- [ ] [Explore menu link editor: add, edit, and remove search links from a pop-up](issues/explore-menu-link-editor.md)
+- [x] [Explore menu link editor: add, edit, and remove search links from a pop-up](issues/explore-menu-link-editor.md)
 - [x] [Make search results display as an episode thumbnail list instead of a channel list](issues/make-search-results-episode-first.md)
 - [x] [Restore channel and playlist matches to search results (secondary block cut by the episode window)](issues/restore-secondary-search-matches.md)
 - [x] [Add search result pagination with lazy loading](issues/add-search-result-pagination-and-lazy-loading.md)

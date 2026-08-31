@@ -418,6 +418,151 @@ button:disabled {
   width: 1.65rem;
 }
 
+.side-section-explore {
+  position: relative;
+}
+
+.side-section-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding-right: 0.55rem;
+}
+
+.explore-add,
+.explore-action {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.55rem;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  padding: 0;
+}
+
+.explore-add {
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.explore-add svg,
+.explore-action svg {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1rem;
+}
+
+.explore-action {
+  height: 1.4rem;
+  width: 1.4rem;
+}
+
+.explore-action svg {
+  height: 0.8rem;
+  width: 0.8rem;
+}
+
+.explore-add:hover,
+.explore-add:focus-visible,
+.explore-action:hover,
+.explore-action:focus-visible {
+  background: var(--chip);
+  color: var(--text);
+}
+
+.explore-row {
+  align-items: center;
+  display: flex;
+  gap: 0.15rem;
+}
+
+.explore-row a {
+  flex: 1;
+  min-width: 0;
+}
+
+.explore-row a span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explore-actions {
+  display: flex;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.explore-row:hover .explore-actions,
+.explore-row:focus-within .explore-actions {
+  opacity: 1;
+}
+
+.explore-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.15rem 0.8rem 0.25rem;
+}
+
+.explore-editor-panel {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  box-shadow: 0 1.2rem 2.4rem rgba(0, 0, 0, 0.45);
+  left: 0.6rem;
+  padding: 0.75rem;
+  position: absolute;
+  right: 0.6rem;
+  top: 3rem;
+  z-index: 30;
+}
+
+.explore-editor-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.explore-editor-form input {
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  min-width: 0;
+  padding: 0.55rem 0.9rem;
+}
+
+.explore-editor-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.explore-editor-buttons button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #1d1306;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.45rem 0.9rem;
+}
+
+.explore-editor-buttons button[type='button'] {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.explore-editor-status {
+  font-size: 0.82rem;
+  margin-top: 0.55rem;
+}
+
 .content-frame {
   grid-column: 2;
   grid-row: 2;
@@ -2637,6 +2782,14 @@ button.thumbnail-link:disabled {
   .side-nav a span:last-child,
   .side-section a span:last-child,
   .side-section h2 {
+    display: none;
+  }
+
+  /* The Explore link editor is a desktop-size feature: the icon-only
+     collapse keeps the pre-editor plain links, so the section head (with
+     the add control) and the per-link edit/remove controls disappear. */
+  .side-section-head,
+  .explore-actions {
     display: none;
   }
 

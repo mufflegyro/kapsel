@@ -23,7 +23,7 @@
     { label: 'Downloads', href: '/downloads' },
     { label: 'Settings', href: '/settings' },
   ];
-  const sidebarExplore = ['Music', 'Gaming', 'Podcasts', 'Education'];
+  const defaultExploreLinks = ['Music', 'Gaming', 'Podcasts', 'Education'];
   const playbackProgressSyncInterval = 10000;
   const libraryPageSize = 50;
   const searchPageSize = 50;
@@ -35,6 +35,7 @@
   const captionModeStorageKey = 'kapsel.captions';
   const homeVideoSortStorageKey = 'kapsel.homeVideoSort';
   const homeHideWatchedStorageKey = 'kapsel.homeHideWatched';
+  const exploreLinksStorageKey = 'kapsel.exploreLinks';
   const liveJobsPageRefreshDelay = 250;
   const liveJobsPageRetryDelay = 3000;
   const jobStatusFilters = [
@@ -137,6 +138,16 @@
   let quickQueueRoot;
   let quickQueueInput;
   let quickQueueButton;
+  let exploreLinks = savedExploreLinks() ?? [...defaultExploreLinks];
+  let exploreSection;
+  let exploreEditorOpen = false;
+  let exploreEditorMode = 'add';
+  let exploreEditorIndex = -1;
+  let exploreEditorValue = '';
+  let exploreEditorStatus = '';
+  let exploreEditorStatusTimer = null;
+  let exploreEditorTrigger = null;
+  let exploreEditorInput;
   let watchMediaElement;
   let playbackProgressMutationToken = 0;
   let playbackProgressInvalidation = { videoID: '', version: 0 };
@@ -285,6 +296,8 @@
   document.addEventListener('visibilitychange', handleWatchMediaURLWake);
   document.addEventListener('pointerdown', handleQuickQueuePointerDown);
   document.addEventListener('keydown', quickQueueKeydown);
+  document.addEventListener('pointerdown', handleExploreEditorPointerDown);
+  document.addEventListener('keydown', exploreEditorKeydown);
   loadSession();
 
   onDestroy(() => {
@@ -293,6 +306,9 @@
     document.removeEventListener('visibilitychange', handleWatchMediaURLWake);
     document.removeEventListener('pointerdown', handleQuickQueuePointerDown);
     document.removeEventListener('keydown', quickQueueKeydown);
+    document.removeEventListener('pointerdown', handleExploreEditorPointerDown);
+    document.removeEventListener('keydown', exploreEditorKeydown);
+    if (exploreEditorStatusTimer) clearTimeout(exploreEditorStatusTimer);
     if (channelJobTimer) clearTimeout(channelJobTimer);
     if (videoJobTimer) clearTimeout(videoJobTimer);
     if (previewJobTimer) clearTimeout(previewJobTimer);
@@ -318,6 +334,9 @@
   }
 
   function setRoute(nextHref) {
+    // The Explore pop-up editor belongs to the sidebar, not to any route, so
+    // a navigation (e.g. clicking an Explore link) dismisses it.
+    closeExploreEditor(false);
     const next = new URL(nextHref, window.location.origin);
     if (path === next.pathname && locationSearch === next.search) {
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -1600,6 +1619,105 @@
       quickQueueOpen = false;
       quickQueueButton?.focus();
     }
+  }
+
+  function savedExploreLinks() {
+    try {
+      const raw = window.localStorage.getItem(exploreLinksStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return null;
+      const cleaned = [];
+      for (const value of parsed) {
+        if (typeof value !== 'string') continue;
+        const label = value.trim();
+        if (!label) continue;
+        if (!cleaned.some(item => item.toLowerCase() === label.toLowerCase())) cleaned.push(label);
+      }
+      return cleaned;
+    } catch {
+      return null;
+    }
+  }
+
+  function setExploreLinks(next) {
+    exploreLinks = next;
+    try {
+      window.localStorage.setItem(exploreLinksStorageKey, JSON.stringify(next));
+    } catch {
+      // Storage can be unavailable in private or locked-down browsing contexts.
+    }
+  }
+
+  function openExploreEditor(mode, index = -1, trigger = null) {
+    exploreEditorMode = mode;
+    exploreEditorIndex = index;
+    exploreEditorTrigger = trigger;
+    exploreEditorValue = mode === 'edit' ? (exploreLinks[index] ?? '') : '';
+    exploreEditorStatus = '';
+    exploreEditorOpen = true;
+    queueMicrotask(() => exploreEditorInput?.focus());
+  }
+
+  function closeExploreEditor(refocusTrigger = true) {
+    if (!exploreEditorOpen) return;
+    exploreEditorOpen = false;
+    exploreEditorStatus = '';
+    if (exploreEditorStatusTimer) {
+      clearTimeout(exploreEditorStatusTimer);
+      exploreEditorStatusTimer = null;
+    }
+    if (refocusTrigger) exploreEditorTrigger?.focus();
+    exploreEditorTrigger = null;
+  }
+
+  function showExploreEditorStatus(message) {
+    exploreEditorStatus = message;
+    if (exploreEditorStatusTimer) clearTimeout(exploreEditorStatusTimer);
+    exploreEditorStatusTimer = setTimeout(() => {
+      exploreEditorStatus = '';
+      exploreEditorStatusTimer = null;
+    }, 4000);
+  }
+
+  function submitExploreEditor() {
+    const query = exploreEditorValue.trim();
+    if (!query) {
+      showExploreEditorStatus('Enter a search query first.');
+      return;
+    }
+    const duplicate = exploreLinks.some((item, index) => {
+      if (exploreEditorMode === 'edit' && index === exploreEditorIndex) return false;
+      return item.toLowerCase() === query.toLowerCase();
+    });
+    if (duplicate) {
+      showExploreEditorStatus('That query is already saved in Explore.');
+      return;
+    }
+    if (exploreEditorMode === 'edit' && exploreEditorIndex >= 0 && exploreEditorIndex < exploreLinks.length) {
+      const next = [...exploreLinks];
+      next[exploreEditorIndex] = query;
+      setExploreLinks(next);
+    } else if (exploreEditorMode === 'add') {
+      setExploreLinks([...exploreLinks, query]);
+    }
+    closeExploreEditor();
+  }
+
+  function removeExploreLink(index) {
+    if (index < 0 || index >= exploreLinks.length) return;
+    setExploreLinks(exploreLinks.filter((_, i) => i !== index));
+    if (exploreEditorOpen) closeExploreEditor(false);
+  }
+
+  function handleExploreEditorPointerDown(event) {
+    if (!exploreEditorOpen) return;
+    if (exploreSection && !exploreSection.contains(event.target)) closeExploreEditor(false);
+  }
+
+  function exploreEditorKeydown(event) {
+    if (!exploreEditorOpen) return;
+    if (event.key === 'Escape') closeExploreEditor();
   }
 
   async function addVideo(rawURL = videoURL, options = {}) {
@@ -3378,14 +3496,56 @@
       {/each}
     </nav>
 
-    <section class="side-section" aria-labelledby="explore-title">
-      <h2 id="explore-title">Explore</h2>
-      {#each sidebarExplore as label}
-        <a href="/search?q={encodeURIComponent(label)}" aria-label={label} onclick={event => navigate(event, `/search?q=${encodeURIComponent(label)}`)}>
-          <span class="side-icon" aria-hidden="true">{label.slice(0, 1)}</span>
-          <span>{label}</span>
-        </a>
+    <section class="side-section side-section-explore" aria-labelledby="explore-title" bind:this={exploreSection}>
+      <div class="side-section-head">
+        <h2 id="explore-title">Explore</h2>
+        <button class="explore-add" type="button" aria-label="Add Explore link" aria-haspopup="dialog" aria-expanded={exploreEditorOpen && exploreEditorMode === 'add'} aria-controls="explore-editor-panel" title="Add Explore link" onclick={event => openExploreEditor('add', -1, event.currentTarget)} data-testid="explore-add">
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+        </button>
+      </div>
+      {#each exploreLinks as label, index (label)}
+        <div class="explore-row">
+          <a href="/search?q={encodeURIComponent(label)}" aria-label={label} title={label} onclick={event => navigate(event, `/search?q=${encodeURIComponent(label)}`)}>
+            <span class="side-icon" aria-hidden="true">{label.slice(0, 1)}</span>
+            <span class="explore-label">{label}</span>
+          </a>
+          <span class="explore-actions">
+            <button class="explore-action" type="button" aria-label={`Edit ${label} from Explore`} aria-haspopup="dialog" aria-expanded={exploreEditorOpen && exploreEditorMode === 'edit' && exploreEditorIndex === index} aria-controls="explore-editor-panel" title={`Edit ${label} from Explore`} onclick={event => openExploreEditor('edit', index, event.currentTarget)}>
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <path d="m14.5 5.5 4 4" />
+                <path d="M4 20h4L18.5 9.5l-4-4L4 16v4Z" />
+              </svg>
+            </button>
+            <button class="explore-action explore-action-remove" type="button" aria-label={`Remove ${label} from Explore`} title={`Remove ${label} from Explore`} onclick={() => removeExploreLink(index)}>
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <path d="m6 6 12 12" />
+                <path d="m18 6-12 12" />
+              </svg>
+            </button>
+          </span>
+        </div>
       {/each}
+      {#if exploreLinks.length === 0}
+        <p class="explore-empty">Search the archive and pin a query here.</p>
+      {/if}
+      {#if exploreEditorOpen}
+        <div id="explore-editor-panel" class="explore-editor-panel" role="dialog" aria-modal="false" aria-label={exploreEditorMode === 'edit' ? 'Edit Explore link' : 'Add Explore link'} tabindex="-1" data-testid="explore-editor-panel">
+          <form class="explore-editor-form" onsubmit={event => { event.preventDefault(); submitExploreEditor(); }}>
+            <label class="visually-hidden" for="explore-editor-query">Search query</label>
+            <input id="explore-editor-query" bind:this={exploreEditorInput} bind:value={exploreEditorValue} type="text" placeholder="Search query" required data-testid="explore-editor-input" />
+            <div class="explore-editor-buttons">
+              <button type="submit" data-testid="explore-editor-save">{exploreEditorMode === 'edit' ? 'Save' : 'Add'}</button>
+              <button type="button" onclick={() => closeExploreEditor()}>Cancel</button>
+            </div>
+          </form>
+          {#if exploreEditorStatus}
+            <div role="status" aria-live="polite" class="explore-editor-status" data-testid="explore-editor-status">{exploreEditorStatus}</div>
+          {/if}
+        </div>
+      {/if}
     </section>
   </aside>
 

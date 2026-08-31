@@ -416,6 +416,83 @@ test('home browse chrome shows feed position, aligned titles, and quieter explor
   await expect(primaryHome).toHaveCSS('outline-style', 'solid');
 });
 
+test('explore link editor adds, edits, removes, and persists sidebar search links', async ({ page, viewport }) => {
+  // The editor affordances are a desktop-size feature; the sidebar Explore
+  // section is display:none below 780px and the controls hide below 1180px.
+  test.skip((viewport?.width ?? 0) <= 1180, 'Explore link editor is a desktop-size feature');
+
+  await page.goto('/');
+
+  // A fresh profile keeps the four defaults untouched.
+  const exploreLinks = page.locator('.side-section-explore a');
+  await expect(exploreLinks).toHaveCount(4);
+  await expect(exploreLinks.filter({ hasText: 'Music' })).toHaveCount(1);
+
+  // The pop-up editor adds a query as a search shortcut.
+  await page.getByTestId('explore-add').click();
+  await expect(page.getByTestId('explore-editor-input')).toBeFocused();
+  await page.getByTestId('explore-editor-input').fill('Synthwave');
+  await page.getByTestId('explore-editor-save').click();
+  await expect(page.getByTestId('explore-editor-panel')).toHaveCount(0);
+  const synthwaveLink = exploreLinks.filter({ hasText: 'Synthwave' });
+  await expect(synthwaveLink).toHaveCount(1);
+  await expect(synthwaveLink).toHaveAttribute('href', '/search?q=Synthwave');
+
+  // Duplicate queries (case-insensitively) are rejected with a status, and
+  // empty input never submits.
+  await page.getByTestId('explore-add').click();
+  await page.getByTestId('explore-editor-input').fill('music');
+  await page.getByTestId('explore-editor-save').click();
+  await expect(page.getByTestId('explore-editor-status')).toHaveText('That query is already saved in Explore.');
+  await expect(exploreLinks).toHaveCount(5);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('explore-editor-panel')).toHaveCount(0);
+
+  // Editing a link rewrites it in place (label, href, and icon letter).
+  const musicRow = page.locator('.explore-row').filter({ hasText: 'Music' });
+  await musicRow.hover();
+  await musicRow.getByRole('button', { name: 'Edit Music from Explore' }).click();
+  await expect(page.getByTestId('explore-editor-input')).toHaveValue('Music');
+  await page.getByTestId('explore-editor-input').fill('Lo-fi');
+  await page.getByTestId('explore-editor-save').click();
+  await expect(exploreLinks.filter({ hasText: 'Lo-fi' })).toHaveCount(1);
+  await expect(exploreLinks.filter({ hasText: 'Music' })).toHaveCount(0);
+  await expect(exploreLinks).toHaveCount(5);
+
+  // The edited link navigates to the same search the topbar would run.
+  await exploreLinks.filter({ hasText: 'Lo-fi' }).click();
+  await expect(page).toHaveURL(/\/search\?q=Lo-fi$/);
+  await expect(page.locator('#site-search')).toHaveValue('Lo-fi');
+
+  // Removal applies to added and default links alike.
+  const synthRow = page.locator('.explore-row').filter({ hasText: 'Synthwave' });
+  await synthRow.hover();
+  await synthRow.getByRole('button', { name: 'Remove Synthwave from Explore' }).click();
+  await expect(exploreLinks).toHaveCount(4);
+
+  // The list survives a full reload; clearing the key restores the defaults.
+  await page.reload();
+  await expect(exploreLinks.filter({ hasText: 'Lo-fi' })).toHaveCount(1);
+  await expect(exploreLinks).toHaveCount(4);
+  await page.evaluate(() => window.localStorage.removeItem('kapsel.exploreLinks'));
+  await page.reload();
+  await expect(exploreLinks).toHaveCount(4);
+  await expect(exploreLinks.filter({ hasText: 'Music' })).toHaveCount(1);
+
+  // Removing every link shows the hint, and the add control still works.
+  for (const label of ['Music', 'Gaming', 'Podcasts', 'Education']) {
+    const row = page.locator('.explore-row').filter({ hasText: label });
+    await row.hover();
+    await row.getByRole('button', { name: `Remove ${label} from Explore` }).click();
+  }
+  await expect(exploreLinks).toHaveCount(0);
+  await expect(page.locator('.explore-empty')).toContainText('Search the archive and pin a query here');
+  await page.getByTestId('explore-add').click();
+  await page.getByTestId('explore-editor-input').fill('Jazz');
+  await page.getByTestId('explore-editor-save').click();
+  await expect(exploreLinks.filter({ hasText: 'Jazz' })).toHaveCount(1);
+});
+
 test('critical archive flows render without network downloads', async ({ page }) => {
   let legacyRouteVideoListRequests = 0;
   await page.route('**/api/videos?*', async route => {
