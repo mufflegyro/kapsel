@@ -33,3 +33,4 @@
 - [x] [Import playlists from CSV exports](issues/import-playlists-from-csv.md)
 - [x] [Add metadata-only scan mode to import-playlists](issues/playlist-import-metadata-scan.md)
 - [ ] [Native tvOS client app](issues/native-tvos-client-app.md)
+- [ ] [Investigate the mark-as-played button's desktop vs mobile behavior difference](issues/investigate-mark-played-desktop-vs-mobile.md)
