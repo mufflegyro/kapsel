@@ -34,3 +34,4 @@
 - [x] [Add metadata-only scan mode to import-playlists](issues/playlist-import-metadata-scan.md)
 - [ ] [Native tvOS client app](issues/native-tvos-client-app.md)
 - [ ] [Investigate the mark-as-played button's desktop vs mobile behavior difference](issues/investigate-mark-played-desktop-vs-mobile.md)
+- [x] [Handle scheduled premiere videos with smart retry scheduling](issues/handle-premiere-video-download-retry.md)

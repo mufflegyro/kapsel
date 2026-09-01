@@ -273,6 +273,49 @@ func TestYTDLPRetryDelayClassifiesAuthChallenges(t *testing.T) {
 	}
 }
 
+func TestParsePremiereDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		text string
+		want time.Duration
+		ok   bool
+	}{
+		{text: "ERROR: [youtube] fEDRRQgykd8: Premieres in 26 hours (exit status 1)", want: 26*time.Hour + DefaultPremiereBuffer, ok: true},
+		{text: "ERROR: [youtube] fEDRRQgykd8: Premieres in 30 minutes", want: time.Hour, ok: true},
+		{text: "ERROR: [youtube] fEDRRQgykd8: Premieres in 1 hour 30 minutes", want: 2 * time.Hour, ok: true},
+		{text: "ERROR: [youtube] fEDRRQgykd8: Premieres in 3 days", want: 72*time.Hour + DefaultPremiereBuffer, ok: true},
+		{text: "ERROR: [youtube] fEDRRQgykd8: Premiere in 5 seconds", want: 5*time.Second + DefaultPremiereBuffer, ok: true},
+		{text: "[youtube] abc123: premieres in 2 days, 4 hours (exit status 1)", want: 52*time.Hour + DefaultPremiereBuffer, ok: true},
+		{text: "ERROR: network reset", ok: false},
+		{text: "ERROR: [youtube] abc123: Sign in to confirm your age", ok: false},
+		{text: "ERROR: [youtube] abc123: Premieres in (exit status 1)", ok: false},
+		{text: "", ok: false},
+	}
+
+	for _, test := range tests {
+		got, ok := parsePremiereDelay(test.text)
+		if ok != test.ok || got != test.want {
+			t.Fatalf("parsePremiereDelay(%q) = %v, %v; want %v, %v", test.text, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestYTDLPRetryDelayClassifiesPremieres(t *testing.T) {
+	t.Parallel()
+
+	want := 26*time.Hour + DefaultPremiereBuffer
+	if got := ytdlpRetryDelay([]byte("ERROR: [youtube] fEDRRQgykd8: Premieres in 26 hours (exit status 1)"), errors.New("exit status 1")); got != want {
+		t.Fatalf("expected premiere retry delay %s, got %s", want, got)
+	}
+	if got := ytdlpRetryDelay([]byte("ERROR: network reset"), errors.New("exit status 1")); got != DefaultYTDLPRetryDelay {
+		t.Fatalf("expected default yt-dlp retry delay %s, got %s", DefaultYTDLPRetryDelay, got)
+	}
+	if got := ytdlpRetryDelay([]byte("ERROR: Sign in to confirm your age"), errors.New("exit status 1")); got != DefaultYTDLPAuthRetryDelay {
+		t.Fatalf("expected auth challenge retry delay %s, got %s", DefaultYTDLPAuthRetryDelay, got)
+	}
+}
+
 func TestParseYTDLPDownloadProgress(t *testing.T) {
 	t.Parallel()
 
@@ -980,6 +1023,50 @@ func TestDownloadHandlerDelaysBotDetectionRetry(t *testing.T) {
 	}
 	if !runAfter.Equal(now.Add(DefaultYTDLPAuthRetryDelay)) {
 		t.Fatalf("expected bot retry at %s, got %s", now.Add(DefaultYTDLPAuthRetryDelay), runAfter)
+	}
+}
+
+func TestDownloadHandlerDelaysPremiereRetry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	db := openDownloadDB(t)
+	store := jobs.NewStore(db)
+	job, err := store.Enqueue(context.Background(), jobs.EnqueueParams{
+		Type:        JobType,
+		PayloadJSON: `{"url":"https://www.youtube.com/watch?v=abc123DEF45"}`,
+		MaxAttempts: 3,
+		RunAfter:    now.Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.NewRunner(store, map[string]jobs.Handler{
+		JobType: newTestDownloader(db, store, Config{YTDLPPath: "yt-dlp", MediaRoot: t.TempDir()}, fakeRunner{
+			stdout: []byte("ERROR: [youtube] abc123DEF45: Premieres in 26 hours (exit status 1)"),
+			err:    errors.New("exit status 1"),
+		}).Handle,
+	})
+	runner.Now = func() time.Time { return now }
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := store.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := now.Add(26*time.Hour + DefaultPremiereBuffer)
+	if stored.Status != jobs.StatusQueued || stored.Attempts != 1 {
+		t.Fatalf("expected premiere failure to be queued for delayed retry, got %#v", stored)
+	}
+	runAfter, err := time.Parse(time.RFC3339Nano, stored.RunAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runAfter.Equal(want) {
+		t.Fatalf("expected premiere retry at %s, got %s", want, runAfter)
 	}
 }
 

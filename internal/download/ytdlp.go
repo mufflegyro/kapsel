@@ -26,6 +26,10 @@ const DefaultYTDLPRetryDelay = 10 * time.Minute
 
 const DefaultYTDLPAuthRetryDelay = time.Hour
 
+// DefaultPremiereBuffer is added to a parsed time-until-premiere so the retry
+// lands after the video has actually been published and is downloadable.
+const DefaultPremiereBuffer = 30 * time.Minute
+
 const DefaultSubtitleLanguages = "all"
 
 const DefaultAutomaticSubtitleLanguages = ".*-orig"
@@ -221,6 +225,9 @@ func ytdlpRetryDelay(output []byte, err error) time.Duration {
 	if isYTDLPAuthChallenge(text) {
 		return DefaultYTDLPAuthRetryDelay
 	}
+	if delay, ok := parsePremiereDelay(text); ok {
+		return delay
+	}
 
 	return DefaultYTDLPRetryDelay
 }
@@ -239,6 +246,50 @@ func isYTDLPAuthChallenge(text string) bool {
 	}
 
 	return false
+}
+
+// premiereDelayPattern matches yt-dlp's message for a scheduled premiere that
+// has not started yet (e.g. "ERROR: [youtube] fEDRRQgykd8: Premieres in 26
+// hours"). The capture group holds the consecutive duration components that
+// follow, so "1 hour 30 minutes" is captured as one phrase.
+var premiereDelayPattern = regexp.MustCompile(`(?i)premieres?\s+in\s+((?:\d+\s*(?:hours?|minutes?|seconds?|days?)[\s,]*)+)`)
+
+// premiereDurationComponentPattern extracts one number/unit pair such as
+// "26 hours" from a premiere duration phrase.
+var premiereDurationComponentPattern = regexp.MustCompile(`(?i)(\d+)\s*(hours?|minutes?|seconds?|days?)`)
+
+// parsePremiereDelay extracts the time until a scheduled premiere from yt-dlp
+// error output and returns it with DefaultPremiereBuffer added so the retry
+// lands just after the video is published. It reports false when the text does
+// not contain a premiere message or the stated duration cannot be parsed.
+func parsePremiereDelay(text string) (time.Duration, bool) {
+	match := premiereDelayPattern.FindStringSubmatch(text)
+	if match == nil {
+		return 0, false
+	}
+
+	delay := time.Duration(0)
+	for _, component := range premiereDurationComponentPattern.FindAllStringSubmatch(match[1], -1) {
+		value, err := strconv.Atoi(component[1])
+		if err != nil || value < 0 {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(strings.ToLower(component[2]), "day"):
+			delay += time.Duration(value) * 24 * time.Hour
+		case strings.HasPrefix(strings.ToLower(component[2]), "hour"):
+			delay += time.Duration(value) * time.Hour
+		case strings.HasPrefix(strings.ToLower(component[2]), "minute"):
+			delay += time.Duration(value) * time.Minute
+		case strings.HasPrefix(strings.ToLower(component[2]), "second"):
+			delay += time.Duration(value) * time.Second
+		}
+	}
+	if delay <= 0 {
+		return 0, false
+	}
+
+	return delay + DefaultPremiereBuffer, true
 }
 
 func (d *Downloader) BuildCommand(rawURL string) (Command, error) {
